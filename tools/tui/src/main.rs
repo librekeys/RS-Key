@@ -20,7 +20,7 @@ use crossterm::cursor;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::prelude::*;
@@ -55,16 +55,23 @@ const ACTIONS: &[(&str, Act)] = &[
 ];
 
 enum Pending {
-    Export,            // input buf = PIN
-    RestorePhrase,     // input buf = phrase
-    Restore(String),   // input buf = PIN, holds the phrase
-    Finalize,          // input buf = the typed SEAL confirmation
+    Export,          // input buf = PIN
+    RestorePhrase,   // input buf = phrase
+    Restore(String), // input buf = PIN, holds the phrase
+    Finalize,        // input buf = the typed SEAL confirmation
 }
 
 enum Mode {
     Normal,
-    Input { prompt: String, buf: String, mask: bool, then: Pending },
-    Reveal { body: String },
+    Input {
+        prompt: String,
+        buf: String,
+        mask: bool,
+        then: Pending,
+    },
+    Reveal {
+        body: String,
+    },
 }
 
 struct App {
@@ -104,41 +111,86 @@ impl App {
 fn status_lines(s: &Status) -> Vec<Line<'static>> {
     let dim = Style::default().fg(Color::DarkGray);
     let kv = |k: &str, v: String, c: Color| {
-        Line::from(vec![Span::styled(format!("  {k:<13}"), dim), Span::styled(v, Style::default().fg(c))])
+        Line::from(vec![
+            Span::styled(format!("  {k:<13}"), dim),
+            Span::styled(v, Style::default().fg(c)),
+        ])
     };
-    let mut out = vec![Line::from(Span::styled("FIDO", Style::default().add_modifier(Modifier::BOLD)))];
+    let mut out = vec![Line::from(Span::styled(
+        "FIDO",
+        Style::default().add_modifier(Modifier::BOLD),
+    ))];
     if s.fido_present {
-        out.push(kv("firmware", s.fw.clone().unwrap_or_else(|| "—".into()), Color::Green));
+        out.push(kv(
+            "firmware",
+            s.fw.clone().unwrap_or_else(|| "—".into()),
+            Color::Green,
+        ));
         out.push(kv("versions", s.versions.join(", "), Color::Cyan));
-        out.push(kv("clientPin", s.client_pin.map(|b| b.to_string()).unwrap_or_else(|| "—".into()), Color::Cyan));
+        out.push(kv(
+            "clientPin",
+            s.client_pin
+                .map(|b| b.to_string())
+                .unwrap_or_else(|| "—".into()),
+            Color::Cyan,
+        ));
         if let Some(a) = &s.aaguid {
-            out.push(kv("aaguid", a.chars().take(16).collect::<String>() + "…", Color::DarkGray));
+            out.push(kv(
+                "aaguid",
+                a.chars().take(16).collect::<String>() + "…",
+                Color::DarkGray,
+            ));
         }
         if let Some((sealed, has_seed)) = s.backup {
-            out.push(kv("backup", format!("sealed={sealed}  has_seed={has_seed}"),
-                if sealed { Color::Yellow } else { Color::Green }));
+            out.push(kv(
+                "backup",
+                format!("sealed={sealed}  has_seed={has_seed}"),
+                if sealed { Color::Yellow } else { Color::Green },
+            ));
         }
         if let Some((locked, unlocked)) = s.lock {
-            out.push(kv("seed lock", match (locked, unlocked) {
-                (false, _) => "off".into(),
-                (true, true) => "LOCKED (unlocked this session)".into(),
-                (true, false) => "LOCKED — FIDO ops disabled until unlock".into(),
-            }, if locked { Color::Yellow } else { Color::Green }));
+            out.push(kv(
+                "seed lock",
+                match (locked, unlocked) {
+                    (false, _) => "off".into(),
+                    (true, true) => "LOCKED (unlocked this session)".into(),
+                    (true, false) => "LOCKED — FIDO ops disabled until unlock".into(),
+                },
+                if locked { Color::Yellow } else { Color::Green },
+            ));
         }
     } else {
-        out.push(Line::from(Span::styled("  not found", Style::default().fg(Color::Red))));
+        out.push(Line::from(Span::styled(
+            "  not found",
+            Style::default().fg(Color::Red),
+        )));
     }
     out.push(Line::from(""));
-    out.push(Line::from(Span::styled("Secure boot", Style::default().add_modifier(Modifier::BOLD))));
+    out.push(Line::from(Span::styled(
+        "Secure boot",
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
     match s.secure_boot {
         Some((enabled, locked, bootkey)) => {
-            let (txt, col) = if locked { ("LOCKED", Color::Green) }
-                else if enabled { ("ENABLED", Color::Yellow) } else { ("not enabled", Color::Red) };
+            let (txt, col) = if locked {
+                ("LOCKED", Color::Green)
+            } else if enabled {
+                ("ENABLED", Color::Yellow)
+            } else {
+                ("not enabled", Color::Red)
+            };
             out.push(kv("state", txt.into(), col));
-            out.push(kv("enabled/lock", format!("{enabled} / {locked}"), Color::Cyan));
+            out.push(kv(
+                "enabled/lock",
+                format!("{enabled} / {locked}"),
+                Color::Cyan,
+            ));
             out.push(kv("bootkey", format!("{bootkey:#x}"), Color::DarkGray));
         }
-        None => out.push(Line::from(Span::styled("  (CCID unavailable — reader busy?)", Style::default().fg(Color::DarkGray)))),
+        None => out.push(Line::from(Span::styled(
+            "  (CCID unavailable — reader busy?)",
+            Style::default().fg(Color::DarkGray),
+        ))),
     }
     out
 }
@@ -147,70 +199,136 @@ fn centered(area: Rect, pct_x: u16, lines: u16) -> Rect {
     let w = area.width * pct_x / 100;
     let x = area.x + (area.width - w) / 2;
     let y = area.y + area.height.saturating_sub(lines) / 2;
-    Rect { x, y, width: w, height: lines.min(area.height) }
+    Rect {
+        x,
+        y,
+        width: w,
+        height: lines.min(area.height),
+    }
 }
 
 fn ui(f: &mut Frame, app: &mut App) {
     let rows = Layout::vertical([
-        Constraint::Length(3), Constraint::Min(0), Constraint::Length(1), Constraint::Length(1),
-    ]).split(f.area());
+        Constraint::Length(3),
+        Constraint::Min(0),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .split(f.area());
 
     let title = Paragraph::new(Line::from(vec![
-        Span::styled(" rs-key ", Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " rs-key ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw("  device dashboard "),
-        Span::styled(format!("(refreshed {}s ago)", app.refreshed.elapsed().as_secs()), Style::default().fg(Color::DarkGray)),
-    ])).block(Block::default().borders(Borders::ALL));
+        Span::styled(
+            format!("(refreshed {}s ago)", app.refreshed.elapsed().as_secs()),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]))
+    .block(Block::default().borders(Borders::ALL));
     f.render_widget(title, rows[0]);
 
-    let body = Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).split(rows[1]);
+    let body =
+        Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).split(rows[1]);
     f.render_widget(
         Paragraph::new(status_lines(&app.status))
             .block(Block::default().borders(Borders::ALL).title(" status "))
             .wrap(Wrap { trim: true }),
-        body[0]);
+        body[0],
+    );
     let items: Vec<ListItem> = ACTIONS.iter().map(|(l, _)| ListItem::new(*l)).collect();
     f.render_stateful_widget(
         List::new(items)
             .block(Block::default().borders(Borders::ALL).title(" actions "))
-            .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD))
+            .highlight_style(
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
             .highlight_symbol("▶ "),
-        body[1], &mut app.list);
+        body[1],
+        &mut app.list,
+    );
 
-    f.render_widget(Paragraph::new(Span::styled(format!(" {}", app.log), Style::default().fg(Color::Yellow))), rows[2]);
+    f.render_widget(
+        Paragraph::new(Span::styled(
+            format!(" {}", app.log),
+            Style::default().fg(Color::Yellow),
+        )),
+        rows[2],
+    );
     let hint = match app.mode {
         Mode::Normal => " ↑/↓ or j/k: select   ↵: run   r: refresh   q: quit ",
         Mode::Input { .. } => " type input   ↵: confirm   esc: cancel ",
         Mode::Reveal { .. } => " write it down, then press any key to clear ",
     };
-    f.render_widget(Paragraph::new(Span::styled(hint, Style::default().fg(Color::DarkGray))), rows[3]);
+    f.render_widget(
+        Paragraph::new(Span::styled(hint, Style::default().fg(Color::DarkGray))),
+        rows[3],
+    );
 
     match &app.mode {
-        Mode::Input { prompt, buf, mask, .. } => {
-            let shown = if *mask { "•".repeat(buf.chars().count()) } else { buf.clone() };
+        Mode::Input {
+            prompt, buf, mask, ..
+        } => {
+            let shown = if *mask {
+                "•".repeat(buf.chars().count())
+            } else {
+                buf.clone()
+            };
             let area = centered(f.area(), 72, 6);
             f.render_widget(Clear, area);
             f.render_widget(
                 Paragraph::new(vec![Line::from(""), Line::from(format!("  {shown}_"))])
-                    .block(Block::default().borders(Borders::ALL).title(format!(" {prompt} ")))
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title(format!(" {prompt} ")),
+                    )
                     .wrap(Wrap { trim: true }),
-                area);
+                area,
+            );
         }
         Mode::Reveal { body } => {
             let area = centered(f.area(), 86, 9);
             f.render_widget(Clear, area);
             f.render_widget(
                 Paragraph::new(vec![
-                    Line::from(Span::styled("  WRITE THIS DOWN — the only backup of your FIDO seed.", Style::default().fg(Color::Yellow))),
+                    Line::from(Span::styled(
+                        "  WRITE THIS DOWN — the only backup of your FIDO seed.",
+                        Style::default().fg(Color::Yellow),
+                    )),
                     Line::from(""),
-                    Line::from(Span::styled(format!("  {body}"), Style::default().fg(Color::Green))),
-                ]).block(Block::default().borders(Borders::ALL).title(" seed · BIP-39 ")).wrap(Wrap { trim: true }),
-                area);
+                    Line::from(Span::styled(
+                        format!("  {body}"),
+                        Style::default().fg(Color::Green),
+                    )),
+                ])
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(" seed · BIP-39 "),
+                )
+                .wrap(Wrap { trim: true }),
+                area,
+            );
         }
         Mode::Normal => {}
     }
 }
 
-fn run_blocking(app: &mut App, term: &mut Term, msg: &str, f: impl FnOnce() -> Result<String, String>) -> io::Result<Result<String, String>> {
+fn run_blocking(
+    app: &mut App,
+    term: &mut Term,
+    msg: &str,
+    f: impl FnOnce() -> Result<String, String>,
+) -> io::Result<Result<String, String>> {
     app.log = msg.into();
     term.draw(|fr| ui(fr, app))?;
     Ok(f())
@@ -220,7 +338,13 @@ fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--once") {
         for line in status_lines(&device::gather()) {
-            println!("{}", line.spans.iter().map(|s| s.content.as_ref()).collect::<String>());
+            println!(
+                "{}",
+                line.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            );
         }
         return Ok(());
     }
@@ -274,12 +398,15 @@ fn run(term: &mut Term) -> io::Result<()> {
     loop {
         term.draw(|f| ui(f, &mut app))?;
         if !event::poll(Duration::from_millis(400))? {
-            if matches!(app.mode, Mode::Normal) && app.refreshed.elapsed() >= Duration::from_secs(3) {
+            if matches!(app.mode, Mode::Normal) && app.refreshed.elapsed() >= Duration::from_secs(3)
+            {
                 app.refresh();
             }
             continue;
         }
-        let Event::Key(k) = event::read()? else { continue };
+        let Event::Key(k) = event::read()? else {
+            continue;
+        };
         if k.kind != KeyEventKind::Press {
             continue;
         }
@@ -303,7 +430,11 @@ fn run(term: &mut Term) -> io::Result<()> {
                 }
                 KeyCode::Char(c) => buf.push(c),
                 KeyCode::Enter => {
-                    let Mode::Input { buf, then, .. } = std::mem::replace(&mut app.mode, Mode::Normal) else { unreachable!() };
+                    let Mode::Input { buf, then, .. } =
+                        std::mem::replace(&mut app.mode, Mode::Normal)
+                    else {
+                        unreachable!()
+                    };
                     dispatch(&mut app, term, buf, then)?;
                 }
                 _ => {}
@@ -332,19 +463,37 @@ fn start_action(app: &mut App, term: &mut Term, act: Act) -> io::Result<()> {
             app.refresh();
             app.log = "status refreshed".into();
         }
-        Act::LedGet => app.log = device::led_get().unwrap_or_else(|e| format!("LED get failed: {e}")),
-        Act::LedCycle => app.log = device::led_cycle_idle().unwrap_or_else(|e| format!("LED set failed: {e}")),
-        Act::RebootBootsel => app.log = device::reboot(true).unwrap_or_else(|e| format!("reboot failed: {e}")),
-        Act::RebootApp => app.log = device::reboot(false).unwrap_or_else(|e| format!("reboot failed: {e}")),
+        Act::LedGet => {
+            app.log = device::led_get().unwrap_or_else(|e| format!("LED get failed: {e}"))
+        }
+        Act::LedCycle => {
+            app.log = device::led_cycle_idle().unwrap_or_else(|e| format!("LED set failed: {e}"))
+        }
+        Act::RebootBootsel => {
+            app.log = device::reboot(true).unwrap_or_else(|e| format!("reboot failed: {e}"))
+        }
+        Act::RebootApp => {
+            app.log = device::reboot(false).unwrap_or_else(|e| format!("reboot failed: {e}"))
+        }
         Act::BackupExport => {
             if app.pin_needed() {
-                app.mode = Mode::Input { prompt: "FIDO2 PIN".into(), buf: String::new(), mask: true, then: Pending::Export };
+                app.mode = Mode::Input {
+                    prompt: "FIDO2 PIN".into(),
+                    buf: String::new(),
+                    mask: true,
+                    then: Pending::Export,
+                };
             } else {
                 export(app, term, None)?;
             }
         }
         Act::BackupRestore => {
-            app.mode = Mode::Input { prompt: "BIP-39 phrase (24 words)".into(), buf: String::new(), mask: false, then: Pending::RestorePhrase };
+            app.mode = Mode::Input {
+                prompt: "BIP-39 phrase (24 words)".into(),
+                buf: String::new(),
+                mask: false,
+                then: Pending::RestorePhrase,
+            };
         }
         Act::BackupFinalize => {
             if app.status.backup.map(|(sealed, _)| sealed).unwrap_or(false) {
@@ -352,7 +501,9 @@ fn start_action(app: &mut App, term: &mut Term, act: Act) -> io::Result<()> {
             } else {
                 app.mode = Mode::Input {
                     prompt: "seal export window — irreversible until reset; type SEAL".into(),
-                    buf: String::new(), mask: false, then: Pending::Finalize,
+                    buf: String::new(),
+                    mask: false,
+                    then: Pending::Finalize,
                 };
             }
         }
@@ -365,7 +516,12 @@ fn dispatch(app: &mut App, term: &mut Term, mut buf: String, then: Pending) -> i
         Pending::Export => export(app, term, Some(&buf))?,
         Pending::RestorePhrase => {
             if app.pin_needed() {
-                app.mode = Mode::Input { prompt: "FIDO2 PIN".into(), buf: String::new(), mask: true, then: Pending::Restore(buf) };
+                app.mode = Mode::Input {
+                    prompt: "FIDO2 PIN".into(),
+                    buf: String::new(),
+                    mask: true,
+                    then: Pending::Restore(buf),
+                };
                 return Ok(());
             }
             restore(app, term, &buf, None)?;
@@ -373,7 +529,12 @@ fn dispatch(app: &mut App, term: &mut Term, mut buf: String, then: Pending) -> i
         Pending::Restore(phrase) => restore(app, term, &phrase, Some(&buf))?,
         Pending::Finalize => {
             if buf.trim() == "SEAL" {
-                let r = run_blocking(app, term, "sealing — touch the device if it asks…", device::backup_finalize)?;
+                let r = run_blocking(
+                    app,
+                    term,
+                    "sealing — touch the device if it asks…",
+                    device::backup_finalize,
+                )?;
                 app.log = match r {
                     Ok(m) => m,
                     Err(e) => format!("finalize failed: {e}"),
@@ -390,7 +551,12 @@ fn dispatch(app: &mut App, term: &mut Term, mut buf: String, then: Pending) -> i
 
 fn export(app: &mut App, term: &mut Term, pin: Option<&str>) -> io::Result<()> {
     let pin = pin.map(String::from);
-    match run_blocking(app, term, "exporting — touch the device if it asks…", || device::backup_export(pin.as_deref()))? {
+    match run_blocking(
+        app,
+        term,
+        "exporting — touch the device if it asks…",
+        || device::backup_export(pin.as_deref()),
+    )? {
         Ok(words) => {
             app.mode = Mode::Reveal { body: words };
             app.log = "seed exported".into();
@@ -402,7 +568,12 @@ fn export(app: &mut App, term: &mut Term, pin: Option<&str>) -> io::Result<()> {
 
 fn restore(app: &mut App, term: &mut Term, phrase: &str, pin: Option<&str>) -> io::Result<()> {
     let (phrase, pin) = (phrase.to_string(), pin.map(String::from));
-    let r = run_blocking(app, term, "restoring — touch the device if it asks…", || device::backup_restore(&phrase, pin.as_deref()))?;
+    let r = run_blocking(
+        app,
+        term,
+        "restoring — touch the device if it asks…",
+        || device::backup_restore(&phrase, pin.as_deref()),
+    )?;
     app.log = match r {
         Ok(m) => m,
         Err(e) => format!("restore failed: {e}"),

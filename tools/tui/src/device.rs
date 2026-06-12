@@ -13,9 +13,9 @@
 use aes::Aes256;
 use chacha20poly1305::aead::{Aead, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce};
+use ciborium::value::{Integer, Value};
 use cipher::block_padding::NoPadding;
 use cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
-use ciborium::value::{Integer, Value};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use p256::elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint};
@@ -35,7 +35,9 @@ const PERM_ACFG: i64 = 0x20;
 const VENDOR_AID: &[u8] = &[0xF0, 0x00, 0x00, 0x00, 0x01];
 const RESCUE_AID: &[u8] = &[0xA0, 0x58, 0x3F, 0xC1, 0x9B, 0x7E, 0x4F, 0x21];
 
-pub const COLORS: [&str; 8] = ["off", "red", "green", "blue", "yellow", "magenta", "cyan", "white"];
+pub const COLORS: [&str; 8] = [
+    "off", "red", "green", "blue", "yellow", "magenta", "cyan", "white",
+];
 
 #[derive(Default)]
 pub struct Status {
@@ -54,7 +56,9 @@ pub struct Status {
 
 fn hid_open() -> Option<hidapi::HidDevice> {
     let api = hidapi::HidApi::new().ok()?;
-    let info = api.device_list().find(|d| d.usage_page() == FIDO_USAGE_PAGE)?;
+    let info = api
+        .device_list()
+        .find(|d| d.usage_page() == FIDO_USAGE_PAGE)?;
     info.open_device(&api).ok()
 }
 
@@ -148,10 +152,10 @@ fn cose_key(x: &[u8], y: &[u8]) -> Value {
 fn map_get(v: &Value, key: i128) -> Option<&Value> {
     if let Value::Map(m) = v {
         for (k, val) in m {
-            if let Value::Integer(i) = k {
-                if i128::from(*i) == key {
-                    return Some(val);
-                }
+            if let Value::Integer(i) = k
+                && i128::from(*i) == key
+            {
+                return Some(val);
             }
         }
     }
@@ -180,7 +184,9 @@ fn ecdh_raw(sk: &SecretKey, px: &[u8; 32], py: &[u8; 32]) -> Option<[u8; 32]> {
 
 fn hkdf32(salt: &[u8], ikm: &[u8], info: &[u8]) -> [u8; 32] {
     let mut okm = [0u8; 32];
-    Hkdf::<Sha256>::new(Some(salt), ikm).expand(info, &mut okm).expect("hkdf");
+    Hkdf::<Sha256>::new(Some(salt), ikm)
+        .expand(info, &mut okm)
+        .expect("hkdf");
     okm
 }
 
@@ -234,43 +240,53 @@ fn chacha_encrypt(key: &[u8; 32], nonce: &[u8], aad: &[u8], pt: &[u8]) -> Vec<u8
 fn read_fido(s: &mut Status) {
     let Some(dev) = hid_open() else { return };
     s.fido_present = true;
-    let Some(cid) = ctaphid_init(&dev) else { return };
+    let Some(cid) = ctaphid_init(&dev) else {
+        return;
+    };
     let gi = send_cbor(&dev, cid, &[0x04], 2000);
-    if gi.first() == Some(&0) {
-        if let Ok(v) = ciborium::de::from_reader::<Value, _>(&gi[1..]) {
-            if let Some(Value::Array(a)) = map_get(&v, 1) {
-                s.versions = a.iter().filter_map(|x| x.as_text().map(String::from)).collect();
-            }
-            if let Some(Value::Integer(i)) = map_get(&v, 14) {
-                let n = i128::from(*i) as u32;
-                s.fw = Some(format!("{}.{}.{}", (n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff));
-            }
-            if let Some(Value::Bytes(b)) = map_get(&v, 3) {
-                s.aaguid = Some(b.iter().map(|x| format!("{x:02x}")).collect());
-            }
-            if let Some(Value::Map(opts)) = map_get(&v, 4) {
-                for (k, val) in opts {
-                    if k.as_text() == Some("clientPin") {
-                        s.client_pin = val.as_bool();
-                    }
+    if gi.first() == Some(&0)
+        && let Ok(v) = ciborium::de::from_reader::<Value, _>(&gi[1..])
+    {
+        if let Some(Value::Array(a)) = map_get(&v, 1) {
+            s.versions = a
+                .iter()
+                .filter_map(|x| x.as_text().map(String::from))
+                .collect();
+        }
+        if let Some(Value::Integer(i)) = map_get(&v, 14) {
+            let n = i128::from(*i) as u32;
+            s.fw = Some(format!(
+                "{}.{}.{}",
+                (n >> 16) & 0xff,
+                (n >> 8) & 0xff,
+                n & 0xff
+            ));
+        }
+        if let Some(Value::Bytes(b)) = map_get(&v, 3) {
+            s.aaguid = Some(b.iter().map(|x| format!("{x:02x}")).collect());
+        }
+        if let Some(Value::Map(opts)) = map_get(&v, 4) {
+            for (k, val) in opts {
+                if k.as_text() == Some("clientPin") {
+                    s.client_pin = val.as_bool();
                 }
             }
         }
     }
     let rb = send_cbor(&dev, cid, &[0x41, 0xA1, 0x01, 0x05], 2000);
-    if rb.first() == Some(&0) {
-        if let Ok(v) = ciborium::de::from_reader::<Value, _>(&rb[1..]) {
-            s.backup = Some((
-                map_get(&v, 1).and_then(Value::as_bool).unwrap_or(false),
-                map_get(&v, 2).and_then(Value::as_bool).unwrap_or(false),
-            ));
-            // Keys 3/4 exist from bcdDevice 0x0742 (soft-lock support) on.
-            if let (Some(locked), Some(unlocked)) = (
-                map_get(&v, 3).and_then(Value::as_bool),
-                map_get(&v, 4).and_then(Value::as_bool),
-            ) {
-                s.lock = Some((locked, unlocked));
-            }
+    if rb.first() == Some(&0)
+        && let Ok(v) = ciborium::de::from_reader::<Value, _>(&rb[1..])
+    {
+        s.backup = Some((
+            map_get(&v, 1).and_then(Value::as_bool).unwrap_or(false),
+            map_get(&v, 2).and_then(Value::as_bool).unwrap_or(false),
+        ));
+        // Keys 3/4 exist from bcdDevice 0x0742 (soft-lock support) on.
+        if let (Some(locked), Some(unlocked)) = (
+            map_get(&v, 3).and_then(Value::as_bool),
+            map_get(&v, 4).and_then(Value::as_bool),
+        ) {
+            s.lock = Some((locked, unlocked));
         }
     }
 }
@@ -286,8 +302,10 @@ impl Ccid {
     fn open() -> Result<Self, String> {
         let ctx = Context::establish(Scope::User).map_err(|e| format!("pcsc: {e}"))?;
         let mut names = [0u8; 2048];
-        let readers: Vec<&std::ffi::CStr> =
-            ctx.list_readers(&mut names).map_err(|e| format!("readers: {e}"))?.collect();
+        let readers: Vec<&std::ffi::CStr> = ctx
+            .list_readers(&mut names)
+            .map_err(|e| format!("readers: {e}"))?
+            .collect();
         if readers.is_empty() {
             return Err("no PC/SC readers".into());
         }
@@ -299,11 +317,17 @@ impl Ccid {
         let card = ctx
             .connect(target, ShareMode::Shared, Protocols::ANY)
             .map_err(|e| format!("connect (reader busy?): {e}"))?;
-        Ok(Ccid { card, buf: [0u8; 1024] })
+        Ok(Ccid {
+            card,
+            buf: [0u8; 1024],
+        })
     }
 
     fn apdu(&mut self, data: &[u8]) -> Result<(Vec<u8>, u8, u8), String> {
-        let r = self.card.transmit(data, &mut self.buf).map_err(|e| format!("transmit: {e}"))?;
+        let r = self
+            .card
+            .transmit(data, &mut self.buf)
+            .map_err(|e| format!("transmit: {e}"))?;
         if r.len() < 2 {
             return Err("short response".into());
         }
@@ -327,10 +351,10 @@ fn read_secure_boot(s: &mut Status) {
     if c.select(RESCUE_AID).is_err() {
         return;
     }
-    if let Ok((d, 0x90, 0x00)) = c.apdu(&[0x80, 0x1E, 0x03, 0x00, 0x00]) {
-        if d.len() >= 3 {
-            s.secure_boot = Some((d[0] != 0, d[1] != 0, d[2]));
-        }
+    if let Ok((d, 0x90, 0x00)) = c.apdu(&[0x80, 0x1E, 0x03, 0x00, 0x00])
+        && d.len() >= 3
+    {
+        s.secure_boot = Some((d[0] != 0, d[1] != 0, d[2]));
     }
 }
 
@@ -353,7 +377,11 @@ pub fn led_get() -> Result<String, String> {
     let names = ["idle", "processing", "touch", "boot"];
     let mut out = format!("mode={}", if d[0] != 0 { "steady" } else { "blink" });
     for (i, name) in names.iter().enumerate() {
-        out += &format!("  {name}={}/{}", COLORS.get(d[1 + 2 * i] as usize).copied().unwrap_or("?"), d[2 + 2 * i]);
+        out += &format!(
+            "  {name}={}/{}",
+            COLORS.get(d[1 + 2 * i] as usize).copied().unwrap_or("?"),
+            d[2 + 2 * i]
+        );
     }
     Ok(out)
 }
@@ -379,7 +407,10 @@ pub fn reboot(bootsel: bool) -> Result<String, String> {
     let mut c = Ccid::open()?;
     c.select(VENDOR_AID)?;
     let _ = c.apdu(&[0x00, 0x1F, if bootsel { 0x01 } else { 0x00 }, 0x00, 0x00]);
-    Ok(format!("reboot → {} sent", if bootsel { "BOOTSEL" } else { "app" }))
+    Ok(format!(
+        "reboot → {} sent",
+        if bootsel { "BOOTSEL" } else { "app" }
+    ))
 }
 
 // ---- seed backup (native: MSE + clientPIN proto-2 + BIP-39) ----
@@ -419,7 +450,9 @@ fn acfg_token(dev: &hidapi::HidDevice, cid: [u8; 4], pin: &str) -> Result<[u8; 3
         _ => return Err("no token in response".into()),
     };
     let tok = aes_cbc_decrypt(&aes, &enc_tok).ok_or("token decrypt failed")?;
-    tok.as_slice().try_into().map_err(|_| "bad token length".into())
+    tok.as_slice()
+        .try_into()
+        .map_err(|_| "bad token length".into())
 }
 
 fn coord(cose: &Value, key: i128) -> Result<[u8; 32], String> {
@@ -436,7 +469,10 @@ fn coord(cose: &Value, key: i128) -> Result<[u8; 32], String> {
 /// MSE key agreement; returns (channel key, AAD = device pubkey).
 fn mse(dev: &hidapi::HidDevice, cid: [u8; 4]) -> Result<([u8; 32], [u8; 65]), String> {
     let (sk, px, py) = ecdh_pub();
-    let req = Value::Map(vec![(iv(1), iv(1)), (iv(2), Value::Map(vec![(iv(1), cose_key(&px, &py))]))]);
+    let req = Value::Map(vec![
+        (iv(1), iv(1)),
+        (iv(2), Value::Map(vec![(iv(1), cose_key(&px, &py))])),
+    ]);
     let mut payload = vec![CTAP_VENDOR];
     payload.extend_from_slice(&cbor(&req));
     let r = send_cbor(dev, cid, &payload, 5000);
@@ -490,8 +526,11 @@ pub fn backup_export(pin: Option<&str>) -> Result<String, String> {
         Some(Value::Bytes(b)) if b.len() == 60 => b.clone(),
         _ => return Err("bad export blob".into()),
     };
-    let mut seed = chacha_decrypt(&key, &blob[..12], &aad, &blob[12..]).ok_or("AEAD decrypt failed")?;
-    let mnemonic = bip39::Mnemonic::from_entropy(&seed).map_err(|e| e.to_string())?.to_string();
+    let mut seed =
+        chacha_decrypt(&key, &blob[..12], &aad, &blob[12..]).ok_or("AEAD decrypt failed")?;
+    let mnemonic = bip39::Mnemonic::from_entropy(&seed)
+        .map_err(|e| e.to_string())?
+        .to_string();
     seed.zeroize();
     Ok(mnemonic)
 }
@@ -515,7 +554,11 @@ pub fn backup_finalize() -> Result<String, String> {
 fn seed_fp(words: &str) -> Result<String, String> {
     let m = bip39::Mnemonic::parse(words).map_err(|e| e.to_string())?;
     let (mut ent, len) = m.to_entropy_array();
-    let fp = Sha256::digest(&ent[..len]).iter().take(4).map(|b| format!("{b:02x}")).collect();
+    let fp = Sha256::digest(&ent[..len])
+        .iter()
+        .take(4)
+        .map(|b| format!("{b:02x}"))
+        .collect();
     ent.zeroize();
     Ok(fp)
 }
