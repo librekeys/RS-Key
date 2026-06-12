@@ -91,6 +91,136 @@ pub fn has_small_factor(n_le: &[u8]) -> bool {
         .any(|&p| mod_small(n_le, p) == 0)
 }
 
+// ------------------------------------------------------ incremental sieve -----
+
+/// Force a fresh window after this many steps even if no overflow — a cap, not
+/// a correctness bound (the residues never drift). Keeps the candidate stream
+/// from wandering arbitrarily far from a fresh random draw.
+const SIEVE_WINDOW: u32 = 1 << 14;
+
+/// A running small-prime sieve over consecutive candidates `n, n+2, n+4, …`.
+///
+/// The flat [`has_small_factor`] re-derives every residue `n mod pᵢ` from
+/// scratch (a Horner pass per prime) on every candidate. But consecutive odd
+/// candidates differ by 2, so each residue just steps `r ← (r + 2) mod pᵢ` —
+/// one add and a compare, no division, no Horner. One full `mod_small` set is
+/// paid once when a window is (re)seeded, then amortized over thousands of
+/// near-free steps. The compositeness verdict is identical to
+/// [`has_small_factor`] (proved by the `incremental_matches_flat` test); only
+/// the candidate *stream* changes from independent draws to "scan up from a
+/// random odd start", which is exactly how OpenSSL/GMP generate RSA primes.
+/// The primality decision (strong MR + Lucas) is untouched, so this cannot
+/// affect key strength — only search speed.
+pub struct IncrementalSieve {
+    half: usize,
+    cnt: usize,
+    // `MAX_MOD` is already a single prime's width (an RSA-4096 prime = 256 B).
+    cand: [u8; MAX_MOD],
+    res: [u32; N_SMALL],
+    steps: u32,
+    seeded: bool,
+}
+
+impl Default for IncrementalSieve {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl IncrementalSieve {
+    /// An unseeded sieve; `const` so it can initialize a `static`.
+    pub const fn new() -> Self {
+        Self {
+            half: 0,
+            cnt: 0,
+            cand: [0; MAX_MOD],
+            res: [0; N_SMALL],
+            steps: 0,
+            seeded: false,
+        }
+    }
+
+    /// True until the first [`reseed`](Self::reseed), and again once a window is
+    /// exhausted — the caller must reseed before the next [`step`](Self::step).
+    pub fn needs_seed(&self) -> bool {
+        !self.seeded
+    }
+
+    /// Begin a fresh window from `seed_le` (caller-supplied random bytes, length
+    /// `half`): apply the odd + top-two-bits mask (so the product of two such
+    /// primes keeps `2·half·8` bits) and compute every residue once.
+    pub fn reseed(&mut self, half: usize, seed_le: &[u8]) {
+        debug_assert!((2..=MAX_MOD).contains(&half));
+        self.half = half;
+        self.cnt = sieve_count(half);
+        self.cand[..half].copy_from_slice(&seed_le[..half]);
+        self.cand[half - 1] |= 0xC0;
+        self.cand[0] |= 0x01;
+        for (r, &p) in self.res[..self.cnt]
+            .iter_mut()
+            .zip(&SMALL_PRIMES[..self.cnt])
+        {
+            *r = mod_small(&self.cand[..half], p);
+        }
+        self.steps = 0;
+        self.seeded = true;
+    }
+
+    /// Advance to the next candidate (`n += 2`) and update every residue.
+    /// `Some(true)` — passes the small-prime sieve (no factor); `Some(false)` —
+    /// composite; `None` — the window ended (top bits would overflow, or the
+    /// step cap was hit): reseed before stepping again.
+    pub fn step(&mut self) -> Option<bool> {
+        if !self.seeded {
+            return None;
+        }
+        // n += 2, little-endian carry.
+        let mut carry = 2u16;
+        let mut i = 0;
+        while carry != 0 && i < self.half {
+            let s = self.cand[i] as u16 + carry;
+            self.cand[i] = s as u8;
+            carry = s >> 8;
+            i += 1;
+        }
+        self.steps += 1;
+        // The top two bits must stay set (else the modulus could be short) and
+        // the window is capped; either way, end the window.
+        if self.cand[self.half - 1] & 0xC0 != 0xC0 || self.steps >= SIEVE_WINDOW {
+            self.seeded = false;
+            return None;
+        }
+        // Every residue steps by 2; one conditional subtract keeps it in range.
+        // All are updated even after a zero is seen, so the next step stays
+        // correct.
+        let mut composite = false;
+        for (r, &p) in self.res[..self.cnt]
+            .iter_mut()
+            .zip(&SMALL_PRIMES[..self.cnt])
+        {
+            *r += 2;
+            if *r >= p {
+                *r -= p;
+            }
+            composite |= *r == 0;
+        }
+        Some(!composite)
+    }
+
+    /// The current candidate (little-endian, `half` bytes).
+    pub fn candidate(&self) -> &[u8] {
+        &self.cand[..self.half]
+    }
+
+    /// Wipe the candidate window (a found prime may still sit in it).
+    pub fn scrub(&mut self) {
+        use zeroize::Zeroize;
+        self.cand.zeroize();
+        self.res.zeroize();
+        self.seeded = false;
+    }
+}
+
 // -------------------------------------------------------- modexp backend -----
 
 #[cfg(target_os = "none")]
@@ -372,6 +502,64 @@ mod tests {
         assert!(has_small_factor(&n));
         // A 256-bit prime has no small factor.
         assert!(!has_small_factor(&a_prime_le()));
+    }
+
+    #[test]
+    fn incremental_matches_flat() {
+        // The running sieve's verdict must equal the flat has_small_factor on
+        // the exact same candidate, every step, across reseeds — for both the
+        // 1024-bit (128 B) and 2048-bit (256 B) candidate lengths.
+        for half in [128usize, 256] {
+            let mut sieve = IncrementalSieve::new();
+            let mut seed = vec![0u8; half];
+            let mut state = 0x9E3779B97F4A7C15u64 ^ (half as u64);
+            let mut checked = 0;
+            let mut reseeds = 0;
+            while checked < 6000 {
+                if sieve.needs_seed() {
+                    for b in seed.iter_mut() {
+                        state = state
+                            .wrapping_mul(6364136223846793005)
+                            .wrapping_add(1442695040888963407);
+                        *b = (state >> 33) as u8;
+                    }
+                    sieve.reseed(half, &seed);
+                    reseeds += 1;
+                    continue;
+                }
+                match sieve.step() {
+                    None => continue, // window ended; loop reseeds
+                    Some(passes) => {
+                        let cand = sieve.candidate();
+                        assert_eq!(
+                            passes,
+                            !has_small_factor(cand),
+                            "verdict mismatch at half={half}"
+                        );
+                        // A passing candidate must be odd with the top two bits set.
+                        if passes {
+                            assert_eq!(cand[0] & 1, 1);
+                            assert_eq!(cand[half - 1] & 0xC0, 0xC0);
+                        }
+                        checked += 1;
+                    }
+                }
+            }
+            assert!(reseeds >= 1, "expected at least one window for half={half}");
+        }
+    }
+
+    #[test]
+    fn incremental_steps_by_two() {
+        // Consecutive candidates differ by exactly 2 within a window.
+        let mut sieve = IncrementalSieve::new();
+        let seed = [0x11u8; 128];
+        sieve.reseed(128, &seed);
+        sieve.step().unwrap();
+        let a = BigUint::from_bytes_le(sieve.candidate());
+        sieve.step().unwrap();
+        let b = BigUint::from_bytes_le(sieve.candidate());
+        assert_eq!(b - a, BigUint::from(2u32));
     }
 
     #[test]
