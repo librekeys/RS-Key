@@ -38,7 +38,12 @@ name: ;\
     .size name, .-name
 
     .syntax unified
-    .text
+    // RS-Key: SRAM-resident — the .data.* name makes cortex-m-rt copy this
+    // section into RAM at boot (the same mechanism as embassy-rp's flash RAM
+    // functions). The keygen Fermat filter runs these loops on BOTH cores
+    // concurrently; executed from XIP the cores throttle each other on the
+    // shared flash cache (~40% per-core slowdown measured on the RP2350).
+    .section .data.bignum_asm,"awx",%progbits
     .eabi_attribute Tag_ABI_align_preserved, 1 // only internal functions called, so ok
     .cfi_sections .debug_frame
     .thumb

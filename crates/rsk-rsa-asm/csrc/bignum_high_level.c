@@ -45,7 +45,15 @@ static inline int bignum_reduce_once(uint32_t *output, const uint32_t *modulus_b
     return bignum_submod(output, modulus_bitwise_inv, modulus, input, modulus_length_bytes);
 }
 
-static void ones_complement(uint32_t *output, const uint32_t *input, size_t byte_length) {
+/* RS-Key: the keygen Fermat filter drives bignum_modexp_private_exponent on
+ * BOTH RP2350 cores at once; executed from XIP the cores throttle each other
+ * on the shared flash cache. The .data.* section name puts the hot call chain
+ * in SRAM (cortex-m-rt copies .data.* into RAM at boot — the same trick as
+ * embassy-rp's flash RAM-functions). Only the chain the prime search uses is
+ * moved; the CRT/public/endian paths stay in flash. */
+#define BIGNUM_RAMFUNC __attribute__((section(".data.bignum_hl"), noinline))
+
+static BIGNUM_RAMFUNC void ones_complement(uint32_t *output, const uint32_t *input, size_t byte_length) {
     do {
         *output++ = ~*input++;
         byte_length -= 4;
@@ -180,7 +188,7 @@ int bignum_modexp_public_exponent_big_endian_input(
     return bignum_modexp_public_exponent(temp, base_little_endian, exponent, modulus_little_endian, exponent_length_bytes, aligned_length, temp_inner);
 }
 
-static void modulo(uint32_t *value, size_t modulus_length_bytes, const uint32_t *modulus, const uint32_t modulus_prim[4], const uint32_t *modulus_bitwise_inv, uint32_t *temp) {
+static BIGNUM_RAMFUNC void modulo(uint32_t *value, size_t modulus_length_bytes, const uint32_t *modulus, const uint32_t modulus_prim[4], const uint32_t *modulus_bitwise_inv, uint32_t *temp) {
     // The value parameter (must be less than R*N) is twice the modulus length for input, and the modulus length for output.
     // We calculate x = value * R^-1 mod N, followed by x * R mod N, where R = 2^bitlen. The result is thus value mod N.
     uint32_t *high_half = (uint32_t *)((void *)value + modulus_length_bytes);
@@ -189,7 +197,7 @@ static void modulo(uint32_t *value, size_t modulus_length_bytes, const uint32_t 
     bignum_to_mont(value, modulus, modulus_length_bytes, temp);
 }
 
-static void bignum_modexp_private_exponent_internal(
+static BIGNUM_RAMFUNC void bignum_modexp_private_exponent_internal(
     uint32_t *result,
     const uint8_t *exponent,
     const uint32_t *modulus,
@@ -269,7 +277,7 @@ static void bignum_modexp_private_exponent_internal(
     bignum_reduce_once(result, modulus_bitwise_inv, modulus, result, modulus_length_bytes);
 }
 
-void bignum_modexp_private_exponent(
+BIGNUM_RAMFUNC void bignum_modexp_private_exponent(
     uint32_t *result,
     const uint8_t *exponent,
     const uint32_t *modulus,
