@@ -82,7 +82,15 @@
       fuzzToolchain
       pkgs.cargo-fuzz
     ];
-    MIRIFLAGS = "-Zmiri-many-seeds -Zdeduplicate-diagnostics -Zmiri-strict-provenance";
+    # `-Zmiri-many-seeds` (bare) re-runs the whole 34-target suite once per seed
+    # over a large default range; under the interpreter, with ML-KEM/ML-DSA and
+    # P-521 in the mix, that overran the weekly job's 3 h budget — it was
+    # cancelled before finishing, so the run produced zero coverage. Bound it to
+    # 16 seeds: the test RNGs are deterministically seeded and the code is
+    # single-threaded, so the only thing the seed varies is Miri's address
+    # nondeterminism; 16 samples of that catch what the full range would, in a
+    # fraction of the wall time, and the job actually completes.
+    MIRIFLAGS = "-Zmiri-many-seeds=0..16 -Zdeduplicate-diagnostics -Zmiri-strict-provenance";
     # libFuzzer's runtime is C++: on Linux the fuzz binaries need
     # libstdc++.so.6 at run time, and a nix-linked binary's loader does not
     # search the host's /usr/lib (broke the deep-checks CI job, every target
