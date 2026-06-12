@@ -22,11 +22,17 @@ are marked.
   varies). Per candidate the throughput is ~6.9 ms across both cores. The
   Baillie-PSW that confirms a *survivor* is split between an asm strong
   Miller-Rabin and a software Lucas test, but survivors are only a handful per
-  keygen, so neither half moves the total — the remaining lever is fewer
-  candidates (a wider small-prime sieve), not a faster final test. The device
-  streams keepalives throughout, so tools wait it out; import is fast.
-  *Status: inherent to the hardware class; the parallel-scan share is at the
-  two-core limit.*
+  keygen, so neither half moves the total — the lever is fewer candidates
+  reaching the modexp, i.e. a deeper small-prime sieve. How deep is set by the
+  measured cost ratio: one strong-MR modexp is ~35 ms (1024-bit) / ~239 ms
+  (2048-bit) against ~11 µs / ~23 µs for one trial division, so it pays to
+  sieve by every prime up to ~3.1k / ~10.5k — far past the old flat
+  256-prime (≤1619) sieve. The sieve depth now scales with key size
+  accordingly (448 primes at RSA-2048 … 1280 at RSA-4096), trimming an
+  expected ~8% of the modexps at 2048 and ~20% at 4096. The device streams
+  keepalives throughout, so tools wait it out; import is fast. *Status:
+  inherent to the hardware class; the parallel-scan share is at the two-core
+  limit, the sieve depth at the measured modexp:division ratio.*
 - **ML-KEM is scaffolding** — compiled, tested, unused: no CTAP PIN/UV
   protocol number for PQC key agreement exists yet to implement.
   *Status: waiting on standards.*

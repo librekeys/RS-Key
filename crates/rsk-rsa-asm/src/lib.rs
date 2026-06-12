@@ -16,12 +16,34 @@ pub const MAX_MOD: usize = 256;
 
 // ----------------------------------------------------------- small primes ----
 
-const N_SMALL: usize = 256;
+const N_SMALL: usize = 1280;
 
 /// The first [`N_SMALL`] odd primes (3, 5, 7, …), computed at compile time. Trial
 /// division by these rejects the vast majority of composite candidates cheaply,
-/// before the (relatively) expensive Fermat modexp.
+/// before the (relatively) expensive strong-MR modexp. How many of them a given
+/// candidate is actually divided by is [`sieve_count`] of its length — the
+/// larger the prime, the dearer that modexp, so the deeper it pays to sieve.
 const SMALL_PRIMES: [u32; N_SMALL] = build_small_primes();
+
+/// How many small primes to trial-divide a candidate of `cand_len` bytes by.
+///
+/// Each division that rejects a composite saves one strong-MR modexp, and the
+/// modexp cost grows far faster with key size than a trial division does:
+/// measured on the RP2350 (the `keygen-bench` vendor command), one strong MR
+/// is ~35 ms at a 1024-bit prime and ~239 ms at 2048-bit, while one trial
+/// division is ~11 µs and ~23 µs. The break-even prime bound (sieve while
+/// `p < c_modexp / c_div`) is therefore ~3.1k and ~10.5k respectively — far
+/// past the flat 256-prime (≤1619) sieve we used to run. The optimum scales
+/// ~quadratically with prime length (modexp ~k³, division ~k), so step the
+/// count by candidate size:
+const fn sieve_count(cand_len: usize) -> usize {
+    match cand_len {
+        0..=64 => 256,    // ≤ RSA-1024 half (rare; fips blocks 1024 gen anyway)
+        65..=128 => 448,  // RSA-2048 half (1024-bit) → primes ≲ 3.1k
+        129..=192 => 832, // RSA-3072 half (1536-bit)
+        _ => N_SMALL,     // RSA-4096 half (2048-bit) → primes ≲ 10.5k
+    }
+}
 
 const fn build_small_primes() -> [u32; N_SMALL] {
     let mut primes = [0u32; N_SMALL];
@@ -59,10 +81,14 @@ pub fn mod_small(n_le: &[u8], m: u32) -> u32 {
     r
 }
 
-/// Does `n` (little-endian) have a small prime factor? Trial division only ever
-/// *rejects*, so it can never misclassify a composite as prime.
+/// Does `n` (little-endian) have a small prime factor among the first
+/// [`sieve_count`] primes for its length? Trial division only ever *rejects*,
+/// so it can never misclassify a composite as prime — at worst a too-shallow
+/// sieve just lets more composites through to the (vetted) strong-MR test.
 pub fn has_small_factor(n_le: &[u8]) -> bool {
-    SMALL_PRIMES.iter().any(|&p| mod_small(n_le, p) == 0)
+    SMALL_PRIMES[..sieve_count(n_le.len())]
+        .iter()
+        .any(|&p| mod_small(n_le, p) == 0)
 }
 
 // -------------------------------------------------------- modexp backend -----
@@ -346,6 +372,19 @@ mod tests {
         assert!(has_small_factor(&n));
         // A 256-bit prime has no small factor.
         assert!(!has_small_factor(&a_prime_le()));
+    }
+
+    #[test]
+    fn sieve_depth_scales_with_length() {
+        // 2003 and 3001 are both primes past the 256th (1619): a candidate that
+        // is their product has no factor a 256-deep sieve can see, but the
+        // 448-deep sieve a 128-byte (RSA-2048) candidate gets does catch 2003.
+        let n = BigUint::from(2003u32) * BigUint::from(3001u32);
+        let mut le = n.to_bytes_le();
+        le.resize(128, 0); // RSA-2048 half → sieve_count 448
+        assert!(has_small_factor(&le), "128 B sieve must reach 2003");
+        le.truncate(64); // ≤64 B → sieve_count 256 (≤1619), misses both factors
+        assert!(!has_small_factor(&le), "64 B sieve must miss 2003·3001");
     }
 
     #[test]
