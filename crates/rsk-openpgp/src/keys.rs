@@ -22,8 +22,12 @@ use p521::ecdsa::signature::hazmat::RandomizedPrehashSigner;
 
 use num_bigint_dig::prime::probably_prime;
 use rsa::traits::{PrivateKeyParts, PublicKeyParts};
-use rsa::{BigUint, Pkcs1v15Encrypt, Pkcs1v15Sign, RsaPrivateKey};
+use rsa::{BigUint, Pkcs1v15Encrypt, Pkcs1v15Sign};
 use rsk_rsa_asm::{has_small_factor, mod_small, passes_fermat_base2, self_test};
+
+// Re-exported so the firmware can name the keygen result type without its own
+// `rsa` dependency (the dual-core search returns `Box<RsaPrivateKey>`).
+pub use rsa::RsaPrivateKey;
 
 use crate::Rng;
 use crate::consts::*;
@@ -668,6 +672,12 @@ const MR_REPS: usize = 0;
 /// two `nbits/2`-bit primes with the top two bits set and `gcd(e, prime − 1) = 1`,
 /// assembled with `RsaPrivateKey::from_p_q`. The primality test and key assembly
 /// are the vetted library routines; only the candidate draw is ours.
+///
+/// `step` decomposes into [`try_candidate`](RsaKeygen::try_candidate) (one
+/// draw + test, stateless) and [`offer`](RsaKeygen::offer) (the two-prime
+/// pool): the firmware runs `try_candidate` on BOTH RP2350 cores — each with
+/// its own RNG stream — and funnels every find through one `offer` pool, so
+/// the cores race for `p` and `q` and the expected search time roughly halves.
 pub struct RsaKeygen {
     half_bytes: usize,
     e: BigUint,
@@ -710,19 +720,31 @@ impl RsaKeygen {
         }
     }
 
-    /// Draw and test one prime candidate. The cheap rejections (small factors, the
-    /// `gcd(e, n−1)` check) and the asm-accelerated Fermat pre-filter run first; only
-    /// a survivor reaches the vetted `probably_prime` (Baillie-PSW), which makes the
-    /// final primality decision — so a bug in the asm path can only slow the search,
-    /// never admit a composite.
-    pub fn step(&mut self, rng: &mut dyn Rng) -> RsaStep {
+    /// Whether this keygen can run at all: the modulus size is supported (the
+    /// asm modexp needs the prime length to be a multiple of 32 bytes — every
+    /// standard RSA size qualifies) and the modexp known-answer test passed
+    /// (a broken fast modexp must never yield a key).
+    pub fn usable(&self) -> bool {
         let half = self.half_bytes;
-        // The asm modexp needs the modulus length to be a multiple of 32 bytes;
-        // every standard RSA prime size satisfies this. Bail out if the modexp
-        // self-test failed (a broken fast modexp must never yield a key).
-        if !self.asm_ok || half == 0 || half > MAX_RSA_BYTES / 2 || !half.is_multiple_of(32) {
-            return RsaStep::Failed;
-        }
+        self.asm_ok && half != 0 && half <= MAX_RSA_BYTES / 2 && half.is_multiple_of(32)
+    }
+
+    /// One prime's size in bytes (half the modulus).
+    pub fn half_bytes(&self) -> usize {
+        self.half_bytes
+    }
+
+    /// Draw and test ONE prime candidate of `half_bytes` — the bounded unit of
+    /// search work. Stateless (an associated fn), so a second core can run it
+    /// concurrently with its own RNG stream. The cheap rejections (small
+    /// factors, the `gcd(e, n−1)` check) and the asm-accelerated Fermat
+    /// pre-filter run first; only a survivor reaches the vetted
+    /// `probably_prime` (Baillie-PSW), which makes the final primality
+    /// decision — so a bug in the asm path can only slow the search, never
+    /// admit a composite. The caller is responsible for the [`usable`]
+    /// (RsaKeygen::usable) gate.
+    pub fn try_candidate(rng: &mut dyn Rng, half_bytes: usize) -> Option<BigUint> {
+        let half = half_bytes;
         // A random odd candidate with the top two bits set, little-endian (so the
         // product of two such primes has exactly `nbits` bits).
         let mut cand_le = [0u8; MAX_RSA_BYTES / 2];
@@ -733,20 +755,28 @@ impl RsaKeygen {
         let n = &cand_le[..half];
 
         if has_small_factor(n) {
-            return RsaStep::More;
+            return None;
         }
         // gcd(e, n − 1) == 1  ⇔  n ≢ 1 (mod e), since e is prime.
         if mod_small(n, RSA_E) == 1 {
-            return RsaStep::More;
+            return None;
         }
         if !passes_fermat_base2(n) {
-            return RsaStep::More;
+            return None;
         }
-        let mut cand = BigUint::from_bytes_le(n);
+        let cand = BigUint::from_bytes_le(n);
         cand_le.zeroize();
         if !probably_prime(&cand, MR_REPS) {
-            return RsaStep::More;
+            return None;
         }
+        Some(cand)
+    }
+
+    /// Feed a found prime into the two-prime pool: the first is held, a second
+    /// *distinct* one completes the key (a duplicate is rejected and the held
+    /// prime kept — the search just continues). Accepts primes found by any
+    /// core, in any order.
+    pub fn offer(&mut self, mut cand: BigUint) -> RsaStep {
         match self.p.take() {
             None => {
                 self.p = Some(cand);
@@ -763,11 +793,47 @@ impl RsaKeygen {
             },
         }
     }
+
+    /// [`try_candidate`](RsaKeygen::try_candidate), returning the prime as
+    /// little-endian bytes in `out` — the inter-core transport format (the
+    /// second core ships raw bytes, not bignums, so the zeroize discipline
+    /// stays in this crate). `out` must hold `half_bytes`; the candidate's top
+    /// bits are set, so a find is always exactly `half_bytes` long.
+    pub fn try_candidate_le(rng: &mut dyn Rng, half_bytes: usize, out: &mut [u8]) -> Option<usize> {
+        let mut p = Self::try_candidate(rng, half_bytes)?;
+        let mut v = p.to_bytes_le();
+        p.zeroize();
+        let n = v.len();
+        out[..n].copy_from_slice(&v);
+        v.zeroize();
+        Some(n)
+    }
+
+    /// [`offer`](RsaKeygen::offer) from little-endian bytes (the inter-core
+    /// transport format); scrubs `bytes` after the conversion.
+    pub fn offer_le(&mut self, bytes: &mut [u8]) -> RsaStep {
+        let cand = BigUint::from_bytes_le(bytes);
+        bytes.zeroize();
+        self.offer(cand)
+    }
+
+    /// Draw and test one prime candidate, feeding any find into the pool — the
+    /// single-core step: [`try_candidate`](RsaKeygen::try_candidate) then
+    /// [`offer`](RsaKeygen::offer).
+    pub fn step(&mut self, rng: &mut dyn Rng) -> RsaStep {
+        if !self.usable() {
+            return RsaStep::Failed;
+        }
+        match Self::try_candidate(rng, self.half_bytes) {
+            None => RsaStep::More,
+            Some(cand) => self.offer(cand),
+        }
+    }
 }
 
-/// Blocking RSA keygen — drives [`RsaKeygen`] to completion. Used by the
-/// synchronous `keypair_gen` (host tests, the non-CCID path); on the device the
-/// CCID transport steps `RsaKeygen` itself so it can keep the host alive.
+/// Blocking RSA keygen — drives [`RsaKeygen`] to completion on one core. Used
+/// by the synchronous `keypair_gen` (host tests, the non-CCID path); on the
+/// device the firmware races `try_candidate` on both cores instead.
 pub fn generate_rsa(rng: &mut dyn Rng, nbits: usize) -> Result<RsaPrivateKey, Sw> {
     let mut kg = RsaKeygen::new(nbits);
     loop {
@@ -1201,6 +1267,73 @@ mod rsa_tests {
         let mut out = [0u8; MAX_RSA_BYTES];
         let n = rsa_decipher(&key, &mut SeqRng(8), &data, &mut out).unwrap();
         assert_eq!(&out[..n], msg);
+    }
+
+    #[test]
+    fn keygen_pool_assembles_in_either_order() {
+        // The dual-core search feeds primes through `offer` in whatever order the
+        // cores find them — both orders must assemble the same modulus.
+        let p = BigUint::from_bytes_be(&hex(P_HEX));
+        let q = BigUint::from_bytes_be(&hex(Q_HEX));
+        for (first, second) in [(p.clone(), q.clone()), (q, p)] {
+            let mut kg = RsaKeygen::new(2048);
+            assert!(kg.usable());
+            assert_eq!(kg.half_bytes(), 128);
+            assert!(matches!(kg.offer(first), RsaStep::More));
+            match kg.offer(second) {
+                RsaStep::Done(k) => assert_eq!(k.n().to_bytes_be(), hex(N_HEX)),
+                _ => panic!("two distinct primes must complete the key"),
+            }
+        }
+    }
+
+    #[test]
+    fn keygen_pool_le_transport() {
+        // The inter-core transport: primes as little-endian bytes, scrubbed on use.
+        let (mut p_le, mut q_le) = (hex(P_HEX), hex(Q_HEX));
+        p_le.reverse();
+        q_le.reverse();
+        let mut kg = RsaKeygen::new(2048);
+        assert!(matches!(kg.offer_le(&mut p_le), RsaStep::More));
+        assert!(
+            p_le.iter().all(|&b| b == 0),
+            "transport buffer not scrubbed"
+        );
+        match kg.offer_le(&mut q_le) {
+            RsaStep::Done(k) => assert_eq!(k.n().to_bytes_be(), hex(N_HEX)),
+            _ => panic!("two distinct primes must complete the key"),
+        }
+    }
+
+    #[test]
+    fn try_candidate_le_finds_exact_half() {
+        // Smallest asm-eligible half (32 bytes = RSA-512) so the host search is
+        // quick; a find must fill the half exactly, odd and with the top bits set.
+        let mut rng = SeqRng(42);
+        let mut out = [0u8; 32];
+        let mut tries = 0;
+        let len = loop {
+            tries += 1;
+            assert!(tries < 100_000, "prime search did not converge");
+            if let Some(n) = RsaKeygen::try_candidate_le(&mut rng, 32, &mut out) {
+                break n;
+            }
+        };
+        assert_eq!(len, 32);
+        assert_eq!(out[31] & 0xC0, 0xC0);
+        assert_eq!(out[0] & 1, 1);
+    }
+
+    #[test]
+    fn keygen_pool_rejects_duplicate_prime() {
+        let p = BigUint::from_bytes_be(&hex(P_HEX));
+        let mut kg = RsaKeygen::new(2048);
+        assert!(matches!(kg.offer(p.clone()), RsaStep::More));
+        // The same prime again must not assemble a broken p == q key…
+        assert!(matches!(kg.offer(p), RsaStep::More));
+        // …and the held prime survives: a distinct second one completes the key.
+        let q = BigUint::from_bytes_be(&hex(Q_HEX));
+        assert!(matches!(kg.offer(q), RsaStep::Done(_)));
     }
 }
 
