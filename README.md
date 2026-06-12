@@ -45,6 +45,11 @@ boards run fine without the LED). The RP2350's dual Cortex-M33, 520 KB SRAM,
 TRNG, OTP fuses and glitch detectors do all the work — there is no secure
 element and no debugger requirement: everything flashes over USB BOOTSEL.
 
+The defaults target a 4 MB chip with the LED on GPIO16; a different flash size
+or LED pin is a build knob (`FLASH_SIZE`, `LED_PIN` — see
+[docs/build.md](docs/build.md)), so most RP2350A boards work with at most a
+one-line change. A standard 12 MHz crystal is assumed.
+
 ## Quick start
 
 ```sh

@@ -1,23 +1,45 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 RS-Key contributors
 
-//! Build script: places `memory.x` on the linker search path, resolves the
-//! compile-time USB VID/PID (see [`resolve_vidpid`]) and the XOSC startup-delay
-//! multiplier, and bakes them in as `PK_*` env vars that `main.rs` reads with `env!`.
+//! Build script: generates `memory.x` from the flash size, resolves the
+//! compile-time USB VID/PID (see [`resolve_vidpid`]), the XOSC startup-delay
+//! multiplier, and the WS2812 LED pin, and bakes them in as `PK_*` env vars /
+//! `cfg`s that `main.rs` reads with `env!` / `#[cfg]`.
 use std::env;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 
+/// The Waveshare RP2350-One's flash, and the layout the checked-in `memory.x`
+/// encodes. A `FLASH_SIZE` equal to this writes that file byte-for-byte.
+const DEFAULT_FLASH_SIZE: u32 = 4 * 1024 * 1024;
+
+/// Top-of-flash reserved for the rsk-fs KV store (KVMAIN 1408K + KVCNT 128K);
+/// must match `flash_storage.rs` (`MAIN_LEN` + `COUNTER_LEN`). Fixed across
+/// flash sizes — only the code region below it grows or shrinks.
+const KV_RESERVED: u32 = (1408 + 128) * 1024;
+
 fn main() {
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
+
+    // memory.x: the checked-in script is the 4 MB layout; for any other
+    // FLASH_SIZE we splice a recomputed MEMORY block (code = flash − KV) into it.
+    let flash_size = resolve_flash_size();
+    let template = std::fs::read_to_string("memory.x").expect("read memory.x");
+    let memory_x = if flash_size == DEFAULT_FLASH_SIZE {
+        template
+    } else {
+        splice_memory_block(&template, flash_size)
+    };
     File::create(out.join("memory.x"))
         .unwrap()
-        .write_all(include_bytes!("memory.x"))
+        .write_all(memory_x.as_bytes())
         .unwrap();
     println!("cargo:rustc-link-search={}", out.display());
     println!("cargo:rerun-if-changed=memory.x");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rustc-env=PK_FLASH_SIZE={flash_size}");
+    println!("cargo:rerun-if-env-changed=FLASH_SIZE");
 
     let (vid, pid) = resolve_vidpid();
     println!("cargo:rustc-env=PK_USB_VID={vid}");
@@ -32,6 +54,18 @@ fn main() {
     );
     println!("cargo:rerun-if-env-changed=XOSC_DELAY_MULT");
 
+    // WS2812 data pin (default GPIO16, the Waveshare RP2350-One). Chosen at
+    // compile time because embassy's `PioPin` is implemented per concrete pin
+    // (no `AnyPin`), so a runtime pin can't reach the PIO state machine.
+    let led_pin = resolve_led_pin();
+    println!("cargo:rustc-cfg=led_pin=\"{led_pin}\"");
+    let values = (0..=29u8)
+        .map(|n| format!("\"{n}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    println!("cargo:rustc-check-cfg=cfg(led_pin, values({values}))");
+    println!("cargo:rerun-if-env-changed=LED_PIN");
+
     // Bake fake OTP keys into the image instead of reading the fuses — exercises
     // the kbase migration + boot path without an irreversible OTP write.
     // TEST BUILDS ONLY; never set for a shipped image.
@@ -42,6 +76,90 @@ fn main() {
         }
         println!("cargo:rerun-if-env-changed={env_var}");
     }
+}
+
+/// Resolve `FLASH_SIZE` to a byte count. Accepts a decimal byte count, `0xHEX`,
+/// or a `<n>K`/`<n>KB`/`<n>M`/`<n>MB` suffix; defaults to 4 MB. Must be
+/// sector-aligned, leave room for the KV store, and stay within 16 MB.
+fn resolve_flash_size() -> u32 {
+    let raw = env::var("FLASH_SIZE").unwrap_or_else(|_| DEFAULT_FLASH_SIZE.to_string());
+    let bytes = parse_size(raw.trim())
+        .unwrap_or_else(|| panic!("FLASH_SIZE={raw:?} — use a byte count, 0xHEX, or <n>K / <n>M"));
+    assert!(
+        bytes.is_multiple_of(4096),
+        "FLASH_SIZE={bytes} must be a multiple of 4096 (the QSPI erase sector)"
+    );
+    assert!(
+        bytes > KV_RESERVED,
+        "FLASH_SIZE={bytes} too small — {KV_RESERVED} bytes are reserved for the KV store"
+    );
+    assert!(
+        bytes <= 16 * 1024 * 1024,
+        "FLASH_SIZE={bytes} exceeds the supported 16 MiB"
+    );
+    bytes
+}
+
+/// Parse `123`, `0x10000`, `512K`, `4M`, `4MB`, … into a byte count.
+fn parse_size(s: &str) -> Option<u32> {
+    let lower = s.to_ascii_lowercase();
+    let (digits, mult) = if let Some(n) = lower.strip_suffix("mb").or(lower.strip_suffix('m')) {
+        (n, 1024 * 1024)
+    } else if let Some(n) = lower.strip_suffix("kb").or(lower.strip_suffix('k')) {
+        (n, 1024)
+    } else {
+        (lower.as_str(), 1)
+    };
+    let digits = digits.trim();
+    let base = match digits.strip_prefix("0x") {
+        Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+        None => digits.parse::<u32>().ok()?,
+    };
+    base.checked_mul(mult)
+}
+
+/// Recompute the `MEMORY { … }` block for a non-default flash size and splice it
+/// into the template, keeping the rest (KV symbols, SECTIONS) verbatim. The KV
+/// store stays a fixed [`KV_RESERVED`] at the top; the code region is the rest.
+fn splice_memory_block(template: &str, flash_size: u32) -> String {
+    let code = flash_size - KV_RESERVED;
+    let kvmain = 0x1000_0000 + code;
+    let kvcnt = kvmain + 1408 * 1024;
+    let block = format!(
+        "MEMORY {{\n    \
+         FLASH  : ORIGIN = 0x10000000, LENGTH = {}K\n    \
+         KVMAIN : ORIGIN = {:#010X}, LENGTH = 1408K\n    \
+         KVCNT  : ORIGIN = {:#010X}, LENGTH = 128K\n    \
+         RAM    : ORIGIN = 0x20000000, LENGTH = 512K\n}}",
+        code / 1024,
+        kvmain,
+        kvcnt
+    );
+    let start = template
+        .find("MEMORY {")
+        .expect("memory.x: no MEMORY block");
+    let close = template[start..]
+        .find('}')
+        .expect("memory.x: unterminated MEMORY");
+    format!(
+        "{}{}{}",
+        &template[..start],
+        block,
+        &template[start + close + 1..]
+    )
+}
+
+/// Resolve `LED_PIN` (the WS2812 data GPIO) to a number; defaults to 16. Limited
+/// to the RP2350A range; point it at a free GPIO to keep the indicator off a pin
+/// your board needs.
+fn resolve_led_pin() -> u8 {
+    let raw = env::var("LED_PIN").unwrap_or_else(|_| "16".into());
+    let v = raw
+        .trim()
+        .parse::<u8>()
+        .unwrap_or_else(|_| panic!("LED_PIN={raw:?} must be a GPIO number 0..=29"));
+    assert!(v <= 29, "LED_PIN={v} out of range 0..=29 (RP2350A GPIOs)");
+    v
 }
 
 /// Validate a fake-OTP-key env var: exactly 64 hex chars (32 bytes), returned

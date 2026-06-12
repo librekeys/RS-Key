@@ -18,8 +18,10 @@ use sequential_storage::map::{MapConfig, MapStorage};
 use rsk_fs::Storage;
 use rsk_sdk::error::{Error, Result};
 
-/// External QSPI flash on the Waveshare RP2350-One (4 MB).
-pub const FLASH_SIZE: usize = 4 * 1024 * 1024;
+/// External QSPI flash size in bytes — `FLASH_SIZE` at build time (default 4 MB,
+/// the Waveshare RP2350-One), baked by build.rs as `PK_FLASH_SIZE`. The same
+/// value drives the generated `memory.x`, so the KV partitions track the chip.
+pub const FLASH_SIZE: usize = crate::env_u32(env!("PK_FLASH_SIZE")) as usize;
 
 /// Scratch for one map op; must fit the largest stored key+value (EF_META ≤ 1 KiB).
 const KV_BUF: usize = 2048;

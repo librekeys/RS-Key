@@ -275,7 +275,7 @@ async fn main(_spawner: Spawner) {
     config.serial_number = Some("rs-key-0001");
     config.max_power = 100;
     config.max_packet_size_0 = 64;
-    config.device_release = 0x0748; // bcdDevice: our build counter
+    config.device_release = 0x0749; // bcdDevice: our build counter
 
     let mut builder = Builder::new(
         driver,
@@ -389,9 +389,25 @@ async fn main(_spawner: Spawner) {
         mut common, sm0, ..
     } = Pio::new(p.PIO0, Irqs);
     let program = PioWs2812Program::new(&mut common);
+    // The WS2812 data pin (`LED_PIN`, default GPIO16). embassy's `PioPin` is
+    // implemented per concrete pin, so the pin can't be a runtime value — exactly
+    // one arm survives `#[cfg(led_pin = …)]` (build.rs sets it from `LED_PIN`).
+    macro_rules! led_pin {
+        ($($n:literal => $pin:expr),* $(,)?) => {{
+            $( #[cfg(led_pin = $n)] { $pin } )*
+        }};
+    }
+    let led_data = led_pin!(
+        "0" => p.PIN_0, "1" => p.PIN_1, "2" => p.PIN_2, "3" => p.PIN_3, "4" => p.PIN_4,
+        "5" => p.PIN_5, "6" => p.PIN_6, "7" => p.PIN_7, "8" => p.PIN_8, "9" => p.PIN_9,
+        "10" => p.PIN_10, "11" => p.PIN_11, "12" => p.PIN_12, "13" => p.PIN_13, "14" => p.PIN_14,
+        "15" => p.PIN_15, "16" => p.PIN_16, "17" => p.PIN_17, "18" => p.PIN_18, "19" => p.PIN_19,
+        "20" => p.PIN_20, "21" => p.PIN_21, "22" => p.PIN_22, "23" => p.PIN_23, "24" => p.PIN_24,
+        "25" => p.PIN_25, "26" => p.PIN_26, "27" => p.PIN_27, "28" => p.PIN_28, "29" => p.PIN_29,
+    );
     // `Rgb` wire order — the Waveshare RP2350-One's WS2812 wants RGB, not the
     // embassy GRB default, which swaps R/G on this board (see led.rs).
-    let ws2812 = PioWs2812::with_color_order(&mut common, sm0, p.DMA_CH0, Irqs, p.PIN_16, &program);
+    let ws2812 = PioWs2812::with_color_order(&mut common, sm0, p.DMA_CH0, Irqs, led_data, &program);
     hp.spawn(led::led_task(ws2812).unwrap());
 
     // The worker runs on this (thread) executor. When it blocks in a long

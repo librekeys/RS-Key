@@ -4,7 +4,12 @@
 /* RP2350A (Waveshare RP2350-One): 4 MB external QSPI flash, 520 KB on-chip SRAM.
    Layout follows the canonical rp235x linker script: the bootrom requires an
    IMAGE_DEF block in `.start_block` right after the vector table, and a matching
-   `.end_block`. */
+   `.end_block`.
+
+   This is the default 4 MB MEMORY block; for any other FLASH_SIZE, build.rs
+   splices in a recomputed one (code = flash − 1536K of KV) and keeps everything
+   below it verbatim. Change the KV partition sizes here AND in flash_storage.rs
+   (MAIN_LEN / COUNTER_LEN) together. */
 
 /* The top 1.5 MB is reserved for the rsk-fs KV store, split into two partitions so
    the hot per-operation counters can't churn the credential pages (see

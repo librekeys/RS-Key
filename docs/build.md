@@ -26,6 +26,8 @@ picotool uf2 convert target/thumbv8m.main-none-eabihf/release/firmware -t elf fi
 | `USB_VID` / `USB_PID` | from preset | `0xHHHH` | Raw override, applied on top of the preset (you can override either half alone). |
 | `FW_VERSION` | `5.7.4` | `X.Y.Z` or `X.Y` | The firmware version reported everywhere a tool looks: management DeviceInfo (`ykman info`), FIDO getInfo, CTAPHID INIT, OATH/OTP/PIV version fields. Yubico tools gate features on it; 5.7.4 mimics a current YubiKey 5. Does **not** change the OpenPGP card version (3.4) or the USB `bcdDevice` (an internal build counter). |
 | `XOSC_DELAY_MULT` | `128` | `1..=1024` | Crystal-oscillator startup-delay multiplier ("delayed boot"). A longer settle wait hardens the early-boot clock-switch window against glitch/fault injection. 128 is the embassy default. |
+| `FLASH_SIZE` | `4M` | bytes, `0xHEX`, or `<n>K`/`<n>M` | External QSPI flash size. build.rs regenerates `memory.x` from it — the KV store stays a fixed 1.5 MB at the top, the code region is the rest. `4M` reproduces the checked-in layout byte-for-byte. Use this for boards with a different flash chip (e.g. `8M`); must be ≥ ~2 MB and ≤ 16 MB. |
+| `LED_PIN` | `16` | `0..=29` | The WS2812 status-LED data GPIO (RP2350A). Default GPIO16 is the Waveshare RP2350-One. Point it at a free GPIO on boards that use 16 for something else; the indicator simply drives whatever pin you pick. |
 | `FAKE_MKEK` / `FAKE_DEVK` | unset | 64 hex chars | **Test builds only.** Bakes a fake OTP master key / device key into the image instead of reading the OTP fuses, so the whole OTP migration path can be exercised with zero fuse writes. The build prints a loud warning and the key is greppable in the binary. Flashing a FAKE build onto a provisioned device migrates its data under the fake key — going back orphans that data (recovery = per-applet resets). Never flash one on a device you care about. |
 
 Verify what got baked without flashing:
@@ -101,8 +103,8 @@ Two caveats:
     '(builtins.getFlake (toString ./.)).lib.${builtins.currentSystem}.mkFirmware
        { name = "fw"; vidpid = "Nitro3"; fwVersion = "2.0.0"; }'
   ```
-  Knobs: `vidpid`, `usbVid`, `usbPid`, `fwVersion`, `xoscDelayMult`, `fakeMkek`,
-  `fakeDevk` (mirroring the env vars above). As a convenience each also falls
+  Knobs: `vidpid`, `usbVid`, `usbPid`, `fwVersion`, `xoscDelayMult`, `flashSize`,
+  `ledPin`, `fakeMkek`, `fakeDevk` (mirroring the env vars above). As a convenience each also falls
   back to the like-named env var, so `VIDPID=Pico nix build --impure .#firmware`
   works for a quick throwaway — but the declarative arg is the reproducible path
   and needs no `--impure`.
