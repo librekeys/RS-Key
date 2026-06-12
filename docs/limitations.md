@@ -28,11 +28,13 @@ are marked.
   (2048-bit) against ~11 µs / ~23 µs for one trial division, so it pays to
   sieve by every prime up to ~3.1k / ~10.5k — far past the old flat
   256-prime (≤1619) sieve. The sieve depth now scales with key size
-  accordingly (448 primes at RSA-2048 … 1280 at RSA-4096), trimming an
-  expected ~8% of the modexps at 2048 and ~20% at 4096. The device streams
-  keepalives throughout, so tools wait it out; import is fast. *Status:
-  inherent to the hardware class; the parallel-scan share is at the two-core
-  limit, the sieve depth at the measured modexp:division ratio.*
+  accordingly (448 primes at RSA-2048 … 1280 at RSA-4096). Confirmed by an
+  A/B on the same device (per-candidate cost, which divides out the
+  prime-search-luck variance): **RSA-2048 7.84 → 6.82 ms/candidate (−13%),
+  RSA-4096 36.0 → 23.5 ms/candidate (−35%)** against the old flat sieve. The
+  device streams keepalives throughout, so tools wait it out; import is fast.
+  *Status: inherent to the hardware class; the parallel-scan share is at the
+  two-core limit, the sieve depth at the measured modexp:division ratio.*
 - **ML-KEM is scaffolding** — compiled, tested, unused: no CTAP PIN/UV
   protocol number for PQC key agreement exists yet to implement.
   *Status: waiting on standards.*

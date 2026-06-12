@@ -1027,6 +1027,7 @@ dependencies = [
  "rsk-otp",
  "rsk-piv",
  "rsk-rescue",
+ "rsk-rsa-asm",
  "rsk-sdk",
  "rsk-usb",
  "sequential-storage",
