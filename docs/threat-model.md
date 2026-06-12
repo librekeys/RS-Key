@@ -62,6 +62,11 @@ bulk stream, ISO-7816 APDUs, CTAP2 CBOR. Defenses:
 - **Secure boot** ([production.md](production.md) stage 2): the bootrom
   refuses unsigned images, so no foreign code ever runs to read the OTP key
   in secure mode. Glitch detectors are fused on along the way.
+- **Anti-rollback** ([production.md](production.md) stage 3, optional): with
+  `ROLLBACK_REQUIRED` fused, images below the current epoch — or carrying no
+  epoch at all, i.e. anything sealed before the stage — no longer boot. A
+  kept copy of an old signed release with a since-fixed bug stops being a
+  downgrade path.
 - Before secure boot is enabled, this attacker wins against the OTP tier:
   their firmware reads the MKEK exactly like ours does. That is why the
   production page calls the two stages one story.

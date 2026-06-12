@@ -12,6 +12,11 @@ the only bricking step is the single SECURE_BOOT_ENABLE bit:
   enable    C: SECURE_BOOT_ENABLE = 1.                          the brick bit
   lock      D: KEY_INVALID=0xE + PAGE1/PAGE2 bootloader-read-only.
 
+Optional stage 3 (anti-rollback, docs/production.md) lives in `rsk otp
+rollback-require` — it burns from the *firmware* side, so it works before and
+after `lock`; `status` here shows ROLLBACK_REQUIRED + the boot-version
+thermometer either way.
+
 USB BOOTSEL stays enabled (the recovery path); the signing key lives outside the
 repo and must be backed up. Run against a board in BOOTSEL. --dry-run prints the
 exact picotool commands without touching anything.
@@ -26,6 +31,10 @@ from .common import confirm, die, picotool
 CRIT1_ROW, BOOT_FLAGS1_ROW, BOOTKEY0_0_ROW = 0x40, 0x4B, 0x80
 PAGE1_LOCK1_ROW, PAGE2_LOCK1_ROW = 0xF83, 0xF85
 KEY_INVALID_UNUSED = 0xE
+# Anti-rollback: BOOT_FLAGS0 bit 11 + the 48-bit DEFAULT_BOOT_VERSION
+# thermometer. All RBIT-3 (three consecutive row copies, bitwise majority).
+BOOT_FLAGS0_ROW, BOOT_VERSION0_ROW, BOOT_VERSION1_ROW = 0x48, 0x4E, 0x51
+ROLLBACK_REQUIRED_BIT = 1 << 11
 # PAGEx_LOCK1 byte = LOCK_BL[5:4] | LOCK_NS[3:2] | LOCK_S[1:0], x3 majority.
 # 0x14 = BL/NS read-only, S read-write — NOT 0x3C (inaccessible): pages 1 & 2
 # hold the flags + boot-key the bootrom must READ at every boot.
@@ -60,14 +69,24 @@ def _raw(row):
     return int(m.group(1), 16) & 0xFFFFFF if m else None
 
 
+def _majority3(row):
+    """Bitwise 2-of-3 majority over an RBIT-3 row triple — the bootrom's view."""
+    a, b, c = ((_raw(row + i) or 0) for i in range(3))
+    return (a & b) | (a & c) | (b & c)
+
+
 def read_state():
     crit1, flags1 = _raw(CRIT1_ROW) or 0, _raw(BOOT_FLAGS1_ROW) or 0
+    version = (bin(_majority3(BOOT_VERSION0_ROW)).count("1")
+               + bin(_majority3(BOOT_VERSION1_ROW)).count("1"))
     return {
         "secure_boot_enable": bool(crit1 & 1), "debug_disable": bool(crit1 & (1 << 2)),
         "glitch_enable": bool(crit1 & (1 << 4)), "glitch_sens": (crit1 >> 5) & 3,
         "key_valid": flags1 & 0xF, "key_invalid": (flags1 >> 8) & 0xF,
         "bootkey0_present": any((_raw(BOOTKEY0_0_ROW + i) or 0) for i in range(2)),
         "page1_lock": _raw(PAGE1_LOCK1_ROW), "page2_lock": _raw(PAGE2_LOCK1_ROW),
+        "rollback_required": bool(_majority3(BOOT_FLAGS0_ROW) & ROLLBACK_REQUIRED_BIT),
+        "boot_version": version,
     }
 
 
@@ -79,6 +98,7 @@ def print_state(s):
     print(f"  DEBUG_DISABLE   : {s['debug_disable']}")
     print(f"  GLITCH enable/sens: {s['glitch_enable']} / {s['glitch_sens']}")
     print(f"  SECURE_BOOT_ENABLE: {s['secure_boot_enable']}   <-- enforcement")
+    print(f"  ROLLBACK_REQUIRED : {s['rollback_required']}   boot version {s['boot_version']}/48")
     print(f"  => secure boot {'LOCKED' if locked else 'ENABLED' if s['secure_boot_enable'] else 'NOT enabled'}")
 
 
@@ -174,3 +194,5 @@ def cmd_lock(args):
             die("verify failed: KEY_INVALID did not take")
         print_state(s)
     print("\nDONE. Every future reflash must be a `picotool seal --sign`-ed UF2. Back up the key.")
+    print("Optional next: anti-rollback — seal with `--rollback`, then `rsk otp rollback-require`")
+    print("(docs/production.md, stage 3).")

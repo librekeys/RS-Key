@@ -85,8 +85,11 @@ Two caveats:
   ```sh
   picotool seal --sign --hash result/firmware.uf2 firmware-signed.uf2 \
       ~/.rs-key-secrets/secure_boot_key.pem ~/.rs-key-secrets/otp_secureboot.json \
-      --major 1 --minor 0
+      --major 1 --minor 0 --rollback 1
   ```
+  (`--rollback` = the anti-rollback epoch, mandatory once `ROLLBACK_REQUIRED`
+  is fused and harmless before — see
+  [production.md](production.md#stage-3--anti-rollback-optional).)
 - **The env knobs above are declarative Nix args**, not ambient env. A plain
   `nix build` bakes the defaults; to customize, pass them to the builder. For a
   config you reuse, add a one-line preset package (the flake ships

@@ -9,6 +9,14 @@ lock-page58: apply the permanent BL/NS access lock from secure firmware (rescue
              INS 0x1B) — the half picotool cannot do (the lock row lives in OTP
              page 63, bootloader-read-only). After it lands, `picotool otp get`
              can no longer read the page-58 keys; the firmware still can.
+rollback-require: fuse BOOT_FLAGS0.ROLLBACK_REQUIRED from secure firmware
+             (rescue INS 0x1B, P1=0x48) — after `rsk secure-boot lock` the flag
+             row is bootloader-read-only, so only the firmware can. From then
+             on the bootrom refuses any image without a rollback version, which
+             is what makes `picotool seal --rollback` actually enforce
+             (docs/production.md, "Anti-rollback"). The firmware refuses unless
+             secure boot is enabled — so by construction the image you run it
+             from already carries a version and stays bootable.
 """
 import os
 import re
@@ -32,6 +40,16 @@ LOCK_SW = {
     (0x6A, 0x86): "INCORRECT_P1P2",
     (0x64, 0x00): "EXEC_ERROR — OTP read/write failed or did not verify",
 }
+ROLLBACK_APDU = [0x80, 0x1B, 0x48, 0x00, 0x06] + list(b"ROLLBK") + [0x00]
+ROLLBACK_STATE_APDU = [0x80, 0x1E, 0x06, 0x00, 0x00]
+ROLLBACK_SW = {
+    (0x90, 0x00): "OK — ROLLBACK_REQUIRED is now fused (or was already)",
+    (0x69, 0x85): "CONDITIONS_NOT_SATISFIED — secure boot is not enabled; the flag "
+                  "does nothing without enforcement, so the firmware refused",
+    (0x69, 0x84): "DATA_INVALID — wrong magic payload",
+    (0x6A, 0x86): "INCORRECT_P1P2 — firmware too old (no anti-rollback support)?",
+    (0x64, 0x00): "EXEC_ERROR — OTP read/write failed or did not verify",
+}
 
 
 def register(sub):
@@ -43,6 +61,10 @@ def register(sub):
     lk = g.add_parser("lock-page58", help="apply the page-58 hard-lock from firmware (CCID)")
     lk.add_argument("--dry-run", action="store_true", help="connect + SELECT only")
     lk.set_defaults(func=lock_page58)
+    rb = g.add_parser("rollback-require",
+                      help="fuse ROLLBACK_REQUIRED from firmware (CCID; anti-rollback)")
+    rb.add_argument("--dry-run", action="store_true", help="connect + report state only")
+    rb.set_defaults(func=rollback_require)
 
 
 def _read_raw_row(row):
@@ -123,3 +145,34 @@ def lock_page58(args):
     if (s1, s2) != (0x90, 0x00):
         raise SystemExit(2)
     print("done. From BOOTSEL `picotool otp get -r 0xe90` must now fail (permission).")
+
+
+def rollback_require(args):
+    conn = ccid.connect()
+    _, s1, s2 = ccid.select(conn, RESCUE_AID)
+    if (s1, s2) != (0x90, 0x00):
+        die(f"SELECT rescue AID failed: {s1:02X}{s2:02X} (firmware too old?)")
+    print("rescue applet selected ✓")
+    d, s1, s2 = ccid.transmit(conn, ROLLBACK_STATE_APDU)
+    if (s1, s2) != (0x90, 0x00) or len(d) < 3:
+        die(f"anti-rollback state read failed: SW {s1:02X}{s2:02X} — firmware too old?")
+    required, version, capacity = d[0], d[1], d[2]
+    print(f"anti-rollback state: ROLLBACK_REQUIRED={bool(required)}, "
+          f"boot version {version}/{capacity}")
+    if required:
+        print("already fused — nothing to do ✓")
+        return
+    if args.dry_run:
+        print("dry-run: would send OTP_LOCK (80 1B 48 00 06 'ROLLBK' 00)")
+        return
+    print("This PERMANENTLY makes the bootrom refuse any image WITHOUT a rollback")
+    print("version — including every UF2 sealed before this feature (the old")
+    print("firmware-signed.uf2, an unsealed-era rsk-wipe). Re-seal those with")
+    print("`--rollback` first. See docs/production.md, \"Anti-rollback\". No undo.")
+    confirm("ROLLBACK-REQUIRED")
+    _, s1, s2 = ccid.transmit(conn, ROLLBACK_APDU)
+    print(f"OTP_LOCK → SW {s1:02X}{s2:02X}: {ROLLBACK_SW.get((s1, s2), 'unknown status')}")
+    if (s1, s2) != (0x90, 0x00):
+        raise SystemExit(2)
+    print("done. Negative-test: a signed-but-versionless UF2 must now refuse to boot")
+    print("(falls back to BOOTSEL); the current image keeps booting.")

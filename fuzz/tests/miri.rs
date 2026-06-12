@@ -1118,6 +1118,7 @@ fn miri_piv_apdu() {
 
 #[test]
 fn miri_rescue_apdu() {
+    use rsk_rescue::rollback::{RollbackRaw, ROLLBACK_REQUIRED_BIT};
     use rsk_rescue::{Platform, RescueApplet, SecureBootStatus};
 
     const SERIAL_ID: [u8; 8] = [0xAA, 0xBB, 0xCC, 0xDD, 5, 6, 7, 8];
@@ -1125,13 +1126,16 @@ fn miri_rescue_apdu() {
 
     struct FakePlatform {
         time: Option<u32>,
+        flags0: [u32; 3],
     }
     impl Platform for FakePlatform {
         fn secure_boot_status(&self) -> SecureBootStatus {
+            // enabled: true keeps the rollback-require arm's deepest path
+            // reachable, mirroring the fuzz harness.
             SecureBootStatus {
-                enabled: false,
+                enabled: true,
                 locked: false,
-                bootkey: 0xFF,
+                bootkey: 0,
             }
         }
         fn now(&self) -> Option<u32> {
@@ -1147,18 +1151,37 @@ fn miri_rescue_apdu() {
         fn lock_page58(&mut self) -> bool {
             true
         }
+        fn read_rollback_raw(&self) -> Option<RollbackRaw> {
+            Some(RollbackRaw {
+                flags0: self.flags0,
+                version0: [0b111; 3],
+                version1: [0; 3],
+            })
+        }
+        fn set_rollback_required(&mut self) -> bool {
+            for row in self.flags0.iter_mut() {
+                *row |= ROLLBACK_REQUIRED_BIT;
+            }
+            true
+        }
     }
 
     for data in [
         &b"\x00\xa4\x04\x00"[..],
         b"\x00\xcb\x00\x00",
         b"\x00\xcc\x00\x00\x04\x01\x02\x03\x04",
+        b"\x80\x1b\x48\x00\x06ROLLBK\x00", // rollback-require, full burn path
+        b"\x80\x1b\x48\x00\x06ROLLBX\x00", // bad magic
+        b"\x80\x1e\x06\x00\x00",           // anti-rollback state read
         &[0x00; 10],
     ] {
         let mut fs = Fs::new(RamStorage::new(), &[]);
         fs.scan();
         let rng = RefCell::new(CountRng(0));
-        let platform = RefCell::new(FakePlatform { time: None });
+        let platform = RefCell::new(FakePlatform {
+            time: None,
+            flags0: [0; 3],
+        });
         let mut app = RescueApplet::new(
             SERIAL_ID,
             SERIAL_HASH,

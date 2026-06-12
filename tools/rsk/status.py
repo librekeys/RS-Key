@@ -52,7 +52,7 @@ def _fido():
 
 
 def _secure_boot():
-    """rescue READ P1=0x03 over CCID; None if unavailable."""
+    """rescue READ P1=0x03 (+0x06 anti-rollback) over CCID; None if unavailable."""
     try:
         conn = ccid.connect()
     except (SystemExit, Exception):
@@ -64,7 +64,11 @@ def _secure_boot():
         d, s1, s2 = ccid.transmit(conn, [0x80, 0x1E, 0x03, 0x00, 0x00])
         if (s1, s2) != (0x90, 0x00) or len(d) < 3:
             return {"available": False}
-        return {"available": True, "enabled": bool(d[0]), "locked": bool(d[1]), "bootkey": d[2]}
+        out = {"available": True, "enabled": bool(d[0]), "locked": bool(d[1]), "bootkey": d[2]}
+        d, s1, s2 = ccid.transmit(conn, [0x80, 0x1E, 0x06, 0x00, 0x00])
+        if (s1, s2) == (0x90, 0x00) and len(d) >= 3:  # bcdDevice >= 0x074A
+            out["rollback"] = {"required": bool(d[0]), "version": d[1], "capacity": d[2]}
+        return out
     except Exception as e:
         return {"available": False, "error": str(e)}
 
@@ -104,3 +108,7 @@ def run(args):
     else:
         state = "LOCKED" if sb["locked"] else "ENABLED" if sb["enabled"] else "not enabled"
         print(f"secure boot: {state}  (enabled={sb['enabled']} locked={sb['locked']} bootkey={sb['bootkey']:#x})")
+        rb = sb.get("rollback")
+        if rb:
+            state = "required" if rb["required"] else "not required (versionless images still boot)"
+            print(f"  rollback : {state}  boot version {rb['version']}/{rb['capacity']}")

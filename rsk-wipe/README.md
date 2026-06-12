@@ -59,6 +59,19 @@ nix develop -c picotool uf2 convert \
 cp rsk-wipe.uf2 /Volumes/RP2350/
 ```
 
+On a **secure-boot board** the plain UF2 is refused — seal the wipe image
+exactly like firmware (it is a RAM image; it signs fine). Once the board has
+`ROLLBACK_REQUIRED` fused, the seal must also carry the **current**
+anti-rollback epoch — current, never higher: booting a higher-epoch image
+advances the board's counter and orphans every image below it
+([production.md](../docs/production.md#stage-3--anti-rollback-optional)):
+
+```sh
+picotool seal --sign --hash rsk-wipe.uf2 rsk-wipe-signed.uf2 \
+    ~/.rs-key-secrets/secure_boot_key.pem ~/.rs-key-secrets/otp_secureboot.json \
+    --major 1 --minor 0 --rollback 1
+```
+
 `picotool info -a rsk-wipe.uf2` should report family `rp2350-arm-s`, image type
 **ARM Secure**, with the image-def at a `0x2000_xxxx` (SRAM) address — confirming
 it is a RAM image. The board wipes flash, blinks, and re-enumerates as the

@@ -3,13 +3,15 @@
 
 //! Rescue applet — the recovery / provisioning CCID interface under its own AID:
 //! KEYDEV_SIGN 0x10 (device attestation), WRITE 0x1C (phy record, RTC time), READ
-//! 0x1E (phy / flash stats / secure-boot status / time), REBOOT 0x1F, OTP_LOCK 0x1B.
+//! 0x1E (phy / flash stats / secure-boot status / time / anti-rollback state),
+//! REBOOT 0x1F, OTP_LOCK 0x1B (one-way fuse writes: page-58 lock, rollback-required).
 
 #![cfg_attr(not(test), no_std)]
 
 pub mod keydev;
 pub mod otp_lock;
 pub mod phy;
+pub mod rollback;
 
 use core::cell::RefCell;
 
@@ -35,6 +37,10 @@ const INS_REBOOT_BOOTSEL: u8 = 0x1F;
 /// OTP_LOCK payload guard: the irreversible page-58 lock fires only for this
 /// exact data, so a stray or fuzzed APDU on INS 0x1B can never trigger it.
 const OTP_LOCK_MAGIC: &[u8] = b"LOCK58";
+
+/// OTP_LOCK P1=0x48 payload guard, same idea: the irreversible
+/// ROLLBACK_REQUIRED fuse fires only for this exact data.
+const ROLLBACK_MAGIC: &[u8] = b"ROLLBK";
 
 /// READ P1=0x03 result.
 pub struct SecureBootStatus {
@@ -62,6 +68,13 @@ pub trait Platform {
     /// and the value, so a caller can never redirect this write. IRREVERSIBLE;
     /// returns whether it succeeded.
     fn lock_page58(&mut self) -> bool;
+    /// Raw RBIT-3 copies of the anti-rollback rows ([`rollback`]); `None` on
+    /// any read error. Drives the idempotency decision and the READ report.
+    fn read_rollback_raw(&self) -> Option<rollback::RollbackRaw>;
+    /// Burn [`rollback::ROLLBACK_REQUIRED_BIT`] into every BOOT_FLAGS0 copy.
+    /// The implementation fixes both the rows and the bit, so a caller can
+    /// never redirect this write. IRREVERSIBLE; returns whether it succeeded.
+    fn set_rollback_required(&mut self) -> bool;
 }
 
 pub trait Rng {
@@ -254,6 +267,18 @@ impl<'a> RescueApplet<'a> {
                 Sw::OK
             }
             // 0x05 (trust digest) is deliberately not implemented.
+            0x06 => {
+                let Some(raw) = self.platform.borrow().read_rollback_raw() else {
+                    return Sw::EXEC_ERROR;
+                };
+                let required = rollback::required(rollback::majority(raw.flags0));
+                let version = rollback::version_count(
+                    rollback::majority(raw.version0),
+                    rollback::majority(raw.version1),
+                );
+                res.extend(&[required as u8, version, rollback::VERSION_CAPACITY]);
+                Sw::OK
+            }
             _ => Sw::INCORRECT_P1P2,
         }
     }
@@ -270,6 +295,20 @@ impl<'a> RescueApplet<'a> {
         Sw::OK
     }
 
+    /// INS 0x1B: the one-way OTP writes only secure firmware can perform, one
+    /// per P1 (= the OTP row being targeted), each double-keyed by its own
+    /// magic payload so a stray or fuzzed APDU can never burn a fuse.
+    fn otp_lock(&mut self, apdu: &Apdu) -> Sw {
+        if apdu.p2 != 0x00 {
+            return Sw::INCORRECT_P1P2;
+        }
+        match apdu.p1 {
+            0x58 => self.lock_page58(apdu),
+            0x48 => self.rollback_require(apdu),
+            _ => Sw::INCORRECT_P1P2,
+        }
+    }
+
     /// Apply the permanent page-58 access lock from secure firmware — host
     /// tooling cannot (the lock row lives in bootloader-read-only OTP page 63).
     /// IRREVERSIBLE, so it is triply guarded: P1=0x58 (the page), the
@@ -277,10 +316,7 @@ impl<'a> RescueApplet<'a> {
     /// page would only hide nothing while blinding BOOTSEL). Idempotent: a row
     /// already holding our value returns OK; any other non-blank value is
     /// refused rather than clobbered. See [`otp_lock`].
-    fn otp_lock(&mut self, apdu: &Apdu) -> Sw {
-        if apdu.p1 != 0x58 || apdu.p2 != 0x00 {
-            return Sw::INCORRECT_P1P2;
-        }
+    fn lock_page58(&mut self, apdu: &Apdu) -> Sw {
         if apdu.data != OTP_LOCK_MAGIC {
             return Sw::DATA_INVALID;
         }
@@ -303,6 +339,38 @@ impl<'a> RescueApplet<'a> {
                     _ => Sw::EXEC_ERROR,
                 }
             }
+        }
+    }
+
+    /// Fuse BOOT_FLAGS0.ROLLBACK_REQUIRED from secure firmware — on a board
+    /// whose fuse pages are already bootloader-read-only (`rsk secure-boot
+    /// lock`), host tooling cannot. IRREVERSIBLE, so it is triply guarded:
+    /// P1=0x48 (the row), the [`ROLLBACK_MAGIC`] payload, and secure boot
+    /// actually enabled — without enforcement the bit does nothing on this
+    /// board, so burning it would be pointless fuse damage; with it, the
+    /// command can only ever run from an image that itself passed the rollback
+    /// check, which is exactly the safe ordering. Idempotent: already-fused
+    /// (by 2-of-3 majority) returns OK without another write. See [`rollback`].
+    fn rollback_require(&mut self, apdu: &Apdu) -> Sw {
+        if apdu.data != ROLLBACK_MAGIC {
+            return Sw::DATA_INVALID;
+        }
+        if !self.platform.borrow().secure_boot_status().enabled {
+            return Sw::CONDITIONS_NOT_SATISFIED;
+        }
+        let Some(raw) = self.platform.borrow().read_rollback_raw() else {
+            return Sw::EXEC_ERROR;
+        };
+        if rollback::required(rollback::majority(raw.flags0)) {
+            return Sw::OK;
+        }
+        if !self.platform.borrow_mut().set_rollback_required() {
+            return Sw::EXEC_ERROR;
+        }
+        // Confirm the fuse took with a raw read-back of all three copies.
+        match self.platform.borrow().read_rollback_raw() {
+            Some(r) if rollback::required(rollback::majority(r.flags0)) => Sw::OK,
+            _ => Sw::EXEC_ERROR,
         }
     }
 }
@@ -437,6 +505,9 @@ mod tests {
         /// Simulated PAGE58_LOCK1 raw value; `None` models a read error.
         lock_raw: Option<u32>,
         lock_writes: u32,
+        /// Simulated anti-rollback rows; `None` models a read error.
+        rollback_raw: Option<rollback::RollbackRaw>,
+        rollback_writes: u32,
     }
     impl Default for FakePlatform {
         fn default() -> Self {
@@ -446,6 +517,12 @@ mod tests {
                 status: (false, false, 0xFF),
                 lock_raw: Some(0),
                 lock_writes: 0,
+                rollback_raw: Some(rollback::RollbackRaw {
+                    flags0: [0; 3],
+                    version0: [0; 3],
+                    version1: [0; 3],
+                }),
+                rollback_writes: 0,
             }
         }
     }
@@ -473,6 +550,19 @@ mod tests {
             // OTP bits only go 0→1; model the fuse burning to our value.
             self.lock_writes += 1;
             self.lock_raw = Some(otp_lock::PAGE58_LOCK_VALUE);
+            true
+        }
+        fn read_rollback_raw(&self) -> Option<rollback::RollbackRaw> {
+            self.rollback_raw
+        }
+        fn set_rollback_required(&mut self) -> bool {
+            // OR the bit into every copy, like the firmware burn does.
+            self.rollback_writes += 1;
+            if let Some(raw) = self.rollback_raw.as_mut() {
+                for row in raw.flags0.iter_mut() {
+                    *row |= rollback::ROLLBACK_REQUIRED_BIT;
+                }
+            }
             true
         }
     }
@@ -660,6 +750,149 @@ mod tests {
         let (sw, _) = run(&mut app, &mut fs, &lock_apdu());
         assert_eq!(sw, Sw::EXEC_ERROR);
         assert_eq!(platform.borrow().lock_writes, 0);
+    }
+
+    fn rollback_apdu() -> Vec<u8> {
+        apdu(0x80, INS_OTP_LOCK, 0x48, 0x00, ROLLBACK_MAGIC)
+    }
+
+    /// A platform with secure boot enabled (the rollback-require gate).
+    fn secure_platform() -> FakePlatform {
+        FakePlatform {
+            status: (true, true, 0),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn rollback_require_burns_once_then_idempotent() {
+        let rng = RefCell::new(LcgRng(7));
+        let platform = RefCell::new(secure_platform());
+        let mut app = lock_app(&rng, &platform, None); // no MKEK needed for this one
+        let mut fs = Fs::new(RamStorage::new(), &[]);
+
+        let (sw, _) = run(&mut app, &mut fs, &rollback_apdu());
+        assert_eq!(sw, Sw::OK);
+        assert_eq!(platform.borrow().rollback_writes, 1);
+        let flags0 = platform.borrow().rollback_raw.unwrap().flags0;
+        assert!(
+            flags0
+                .iter()
+                .all(|r| r & rollback::ROLLBACK_REQUIRED_BIT != 0)
+        );
+
+        // A second call finds the bit already fused: OK, no further write.
+        let (sw, _) = run(&mut app, &mut fs, &rollback_apdu());
+        assert_eq!(sw, Sw::OK);
+        assert_eq!(platform.borrow().rollback_writes, 1, "must not re-burn");
+    }
+
+    #[test]
+    fn rollback_require_needs_secure_boot() {
+        let rng = RefCell::new(LcgRng(7));
+        let platform = RefCell::new(FakePlatform::default()); // secure boot off
+        let mut app = lock_app(&rng, &platform, Some([0x11; 32]));
+        let mut fs = Fs::new(RamStorage::new(), &[]);
+        let (sw, _) = run(&mut app, &mut fs, &rollback_apdu());
+        assert_eq!(sw, Sw::CONDITIONS_NOT_SATISFIED);
+        assert_eq!(platform.borrow().rollback_writes, 0);
+    }
+
+    #[test]
+    fn rollback_require_rejects_bad_guards() {
+        let rng = RefCell::new(LcgRng(7));
+        let platform = RefCell::new(secure_platform());
+        let mut app = lock_app(&rng, &platform, Some([0x11; 32]));
+        let mut fs = Fs::new(RamStorage::new(), &[]);
+
+        // wrong magic (including the *other* P1's magic)
+        let (sw, _) = run(
+            &mut app,
+            &mut fs,
+            &apdu(0x80, INS_OTP_LOCK, 0x48, 0x00, b"nope"),
+        );
+        assert_eq!(sw, Sw::DATA_INVALID);
+        let (sw, _) = run(
+            &mut app,
+            &mut fs,
+            &apdu(0x80, INS_OTP_LOCK, 0x48, 0x00, OTP_LOCK_MAGIC),
+        );
+        assert_eq!(sw, Sw::DATA_INVALID);
+        // magics must not cross over to the page-58 arm either
+        let (sw, _) = run(
+            &mut app,
+            &mut fs,
+            &apdu(0x80, INS_OTP_LOCK, 0x58, 0x00, ROLLBACK_MAGIC),
+        );
+        assert_eq!(sw, Sw::DATA_INVALID);
+        // nonzero P2
+        let (sw, _) = run(
+            &mut app,
+            &mut fs,
+            &apdu(0x80, INS_OTP_LOCK, 0x48, 0x01, ROLLBACK_MAGIC),
+        );
+        assert_eq!(sw, Sw::INCORRECT_P1P2);
+
+        assert_eq!(
+            platform.borrow().rollback_writes,
+            0,
+            "no guard path may burn"
+        );
+        assert_eq!(platform.borrow().lock_writes, 0);
+    }
+
+    #[test]
+    fn rollback_require_read_error_is_exec_error() {
+        let rng = RefCell::new(LcgRng(7));
+        let platform = RefCell::new(FakePlatform {
+            rollback_raw: None,
+            ..secure_platform()
+        });
+        let mut app = lock_app(&rng, &platform, Some([0x11; 32]));
+        let mut fs = Fs::new(RamStorage::new(), &[]);
+        let (sw, _) = run(&mut app, &mut fs, &rollback_apdu());
+        assert_eq!(sw, Sw::EXEC_ERROR);
+        assert_eq!(platform.borrow().rollback_writes, 0);
+    }
+
+    #[test]
+    fn rollback_state_read() {
+        let rng = RefCell::new(LcgRng(7));
+        // Two of three flags copies fused (majority: required), thermometer at
+        // 3 + 1 across the two words — incl. one sparse single-copy bit that
+        // must NOT count (majority zero).
+        let platform = RefCell::new(FakePlatform {
+            rollback_raw: Some(rollback::RollbackRaw {
+                flags0: [
+                    rollback::ROLLBACK_REQUIRED_BIT,
+                    rollback::ROLLBACK_REQUIRED_BIT,
+                    0,
+                ],
+                version0: [0b111, 0b111, 0b011],
+                version1: [0b11, 0b01, 0b01],
+            }),
+            ..Default::default()
+        });
+        let mut app = lock_app(&rng, &platform, None);
+        let mut fs = Fs::new(RamStorage::new(), &[]);
+        let (sw, body) = run(&mut app, &mut fs, &apdu(0x80, INS_READ, 0x06, 0, &[]));
+        assert_eq!(sw, Sw::OK);
+        assert_eq!(body, vec![1, 4, rollback::VERSION_CAPACITY]);
+
+        // Blank board: not required, version 0.
+        platform.borrow_mut().rollback_raw = Some(rollback::RollbackRaw {
+            flags0: [0; 3],
+            version0: [0; 3],
+            version1: [0; 3],
+        });
+        let (sw, body) = run(&mut app, &mut fs, &apdu(0x80, INS_READ, 0x06, 0, &[]));
+        assert_eq!(sw, Sw::OK);
+        assert_eq!(body, vec![0, 0, rollback::VERSION_CAPACITY]);
+
+        // Read error.
+        platform.borrow_mut().rollback_raw = None;
+        let (sw, _) = run(&mut app, &mut fs, &apdu(0x80, INS_READ, 0x06, 0, &[]));
+        assert_eq!(sw, Sw::EXEC_ERROR);
     }
 
     #[test]

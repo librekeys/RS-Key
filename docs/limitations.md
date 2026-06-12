@@ -54,8 +54,12 @@ are marked.
   single biggest item — to defend mainly against parser memory corruption,
   which safe Rust plus fuzzing already address. Physical attacks are
   orthogonal to TrustZone. *Status: revisit only with ecosystem support.*
-- **No anti-rollback** — would cost an OTP fuse per release.
-  *Status: not yet; cheap to add if ever needed.*
+- **Anti-rollback is opt-in and epoch-coarse** — `picotool seal --rollback`
+  plus the `ROLLBACK_REQUIRED` fuse
+  ([production.md](production.md#stage-3--anti-rollback-optional)). The OTP
+  thermometer has 48 steps for the board's life, so epochs are burned for
+  security-relevant releases only, and until the fuse is set any
+  previously-signed image still boots. *Status: shipped (optional stage 3).*
 - **No image encryption** — pointless for open-source code (no secrets in
   the image; secrets live sealed in flash), and the RP2350 has no
   transparent XIP decryption anyway. *Status: never.*

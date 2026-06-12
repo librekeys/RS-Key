@@ -2,10 +2,11 @@
 // Copyright (C) 2026 RS-Key contributors
 
 //! [`rsk_rescue::Platform`] for the RP2350: read-only OTP secure-boot status (the
-//! PAC's OTP_DATA_RAW alias — nothing here writes OTP), a session RTC carried as
-//! an epoch base plus uptime (lost on power-cycle), and the deferred reboot via
-//! the vendor applet's pending-reboot slot (run by the worker after the response
-//! has flushed).
+//! PAC's OTP_DATA_RAW alias), a session RTC carried as an epoch base plus uptime
+//! (lost on power-cycle), the deferred reboot via the vendor applet's
+//! pending-reboot slot (run by the worker after the response has flushed), and
+//! the pass-throughs to [`crate::otp_keys`] for the two guarded one-way fuse
+//! writes (page-58 lock, rollback-required).
 
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -72,5 +73,13 @@ impl Platform for RescuePlatform {
 
     fn lock_page58(&mut self) -> bool {
         crate::otp_keys::apply_page58_lock()
+    }
+
+    fn read_rollback_raw(&self) -> Option<rsk_rescue::rollback::RollbackRaw> {
+        crate::otp_keys::read_rollback_raw()
+    }
+
+    fn set_rollback_required(&mut self) -> bool {
+        crate::otp_keys::apply_rollback_required()
     }
 }

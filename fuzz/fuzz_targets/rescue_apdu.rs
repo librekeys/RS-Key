@@ -4,16 +4,18 @@
 #![no_main]
 
 //! Fuzz the rescue applet dispatch (`RescueApplet::process`) — phy write/read,
-//! flash info, secure-boot status, time set/get, reboot and the keydev paths
-//! are all reachable from a length-prefixed APDU replay. The keydev sign/pubkey
-//! commands run real secp256k1 ops over the fuzzer-driven flash state; none may
-//! panic.
+//! flash info, secure-boot status, time set/get, reboot, the keydev paths and
+//! the one-way OTP writes (rollback-required arm; the fake platform reports
+//! secure boot enabled so its full guard chain is reachable) are all reachable
+//! from a length-prefixed APDU replay. The keydev sign/pubkey commands run real
+//! secp256k1 ops over the fuzzer-driven flash state; none may panic.
 
 use core::cell::RefCell;
 
 use libfuzzer_sys::fuzz_target;
 use rsk_fs::storage::ram::RamStorage;
 use rsk_fs::Fs;
+use rsk_rescue::rollback::{RollbackRaw, ROLLBACK_REQUIRED_BIT};
 use rsk_rescue::{Platform, RescueApplet, Rng, SecureBootStatus};
 use rsk_sdk::{Apdu, Applet, ResBuf};
 
@@ -32,10 +34,12 @@ impl Rng for CountRng {
 
 struct FakePlatform {
     time: Option<u32>,
+    flags0: [u32; 3],
 }
 impl Platform for FakePlatform {
     fn secure_boot_status(&self) -> SecureBootStatus {
-        SecureBootStatus { enabled: false, locked: false, bootkey: 0xFF }
+        // enabled: true keeps the rollback-require arm's deepest path fuzzable.
+        SecureBootStatus { enabled: true, locked: false, bootkey: 0 }
     }
     fn now(&self) -> Option<u32> {
         self.time
@@ -50,13 +54,26 @@ impl Platform for FakePlatform {
     fn lock_page58(&mut self) -> bool {
         true
     }
+    fn read_rollback_raw(&self) -> Option<RollbackRaw> {
+        Some(RollbackRaw {
+            flags0: self.flags0,
+            version0: [0b111; 3],
+            version1: [0; 3],
+        })
+    }
+    fn set_rollback_required(&mut self) -> bool {
+        for row in self.flags0.iter_mut() {
+            *row |= ROLLBACK_REQUIRED_BIT;
+        }
+        true
+    }
 }
 
 fuzz_target!(|data: &[u8]| {
     let mut fs = Fs::new(RamStorage::new(), &[]);
     fs.scan();
     let rng = RefCell::new(CountRng(0));
-    let platform = RefCell::new(FakePlatform { time: None });
+    let platform = RefCell::new(FakePlatform { time: None, flags0: [0; 3] });
     let mut app = RescueApplet::new(
         SERIAL_ID,
         SERIAL_HASH,

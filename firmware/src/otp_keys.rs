@@ -9,14 +9,21 @@
 //!
 //! Key provisioning is a deliberate host-side picotool ritual; blank rows (the
 //! factory state) read as `None` → the pre-OTP kbase arm, so this build is safe
-//! on every board. The ONE thing the firmware writes to OTP is the page-58
-//! access lock ([`apply_page58_lock`]), triggered explicitly via the rescue
-//! applet — never at boot — because the burn ritual cannot reach that lock row
-//! (bootloader-read-only OTP page 63). `FAKE_MKEK` / `FAKE_DEVK` (build.rs env)
-//! bake a fake key into the image INSTEAD of reading OTP — test builds only.
+//! on every board. The only things the firmware ever writes to OTP are the two
+//! one-way fuses the host ritual cannot reach from BOOTSEL — the page-58
+//! access lock ([`apply_page58_lock`], bootloader-read-only OTP page 63) and
+//! BOOT_FLAGS0.ROLLBACK_REQUIRED ([`apply_rollback_required`], page 1 once
+//! `rsk secure-boot lock` has made it bootloader-read-only) — each triggered
+//! explicitly via the rescue applet, never at boot. `FAKE_MKEK` / `FAKE_DEVK`
+//! (build.rs env) bake a fake key into the image INSTEAD of reading OTP — test
+//! builds only.
 
 use embassy_rp::otp;
 use rsk_rescue::otp_lock::{PAGE58_LOCK_VALUE, PAGE58_LOCK1_ROW};
+use rsk_rescue::rollback::{
+    BOOT_FLAGS0_ROW, DEFAULT_BOOT_VERSION0_ROW, DEFAULT_BOOT_VERSION1_ROW, ROLLBACK_REQUIRED_BIT,
+    RollbackRaw,
+};
 
 const DEVK_ROW: usize = 0xE80;
 const MKEK_ROW: usize = 0xE90;
@@ -65,6 +72,50 @@ pub fn read_page58_lock() -> Option<u32> {
 /// Returns whether the bootrom write succeeded.
 pub fn apply_page58_lock() -> bool {
     otp::write_raw_word(PAGE58_LOCK1_ROW, PAGE58_LOCK_VALUE).is_ok()
+}
+
+/// Raw RBIT-3 copies of the anti-rollback rows (BOOT_FLAGS0 + the two
+/// DEFAULT_BOOT_VERSION thermometer words); `None` on any read error. Majority
+/// and interpretation live in `rsk_rescue::rollback` so they stay host-tested.
+pub fn read_rollback_raw() -> Option<RollbackRaw> {
+    fn triple(row: usize) -> Option<[u32; 3]> {
+        let mut out = [0u32; 3];
+        for (i, w) in out.iter_mut().enumerate() {
+            *w = otp::read_raw_word(row + i).ok()? & 0x00FF_FFFF;
+        }
+        Some(out)
+    }
+    Some(RollbackRaw {
+        flags0: triple(BOOT_FLAGS0_ROW)?,
+        version0: triple(DEFAULT_BOOT_VERSION0_ROW)?,
+        version1: triple(DEFAULT_BOOT_VERSION1_ROW)?,
+    })
+}
+
+/// Burn ROLLBACK_REQUIRED into each RBIT-3 copy of BOOT_FLAGS0 that does not
+/// already carry it — the half the host ritual cannot do once the fuse pages
+/// are bootloader-read-only (page 1 `LOCK_S` = rw, so secure code can). Each
+/// write programs ONLY our bit (OTP writes OR into the row, so the other boot
+/// flags are untouched) and is read back before moving on. The rows and the
+/// bit are fixed constants here, so this call can only ever set that one flag;
+/// it is reached only through the rescue applet's triple guard. IRREVERSIBLE.
+pub fn apply_rollback_required() -> bool {
+    for i in 0..3 {
+        let row = BOOT_FLAGS0_ROW + i;
+        match otp::read_raw_word(row) {
+            Ok(w) if w & ROLLBACK_REQUIRED_BIT != 0 => continue, // copy already fused
+            Ok(_) => {}
+            Err(_) => return false,
+        }
+        if otp::write_raw_word(row, ROLLBACK_REQUIRED_BIT).is_err() {
+            return false;
+        }
+        match otp::read_raw_word(row) {
+            Ok(w) if w & ROLLBACK_REQUIRED_BIT != 0 => {}
+            _ => return false,
+        }
+    }
+    true
 }
 
 /// One 32-byte key at `row`: presence test first (all 16 raw rows zero =
