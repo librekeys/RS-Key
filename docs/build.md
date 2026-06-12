@@ -52,6 +52,61 @@ env VIDPID=NitroFIDO2 FW_VERSION=1.4.0 cargo build --release -p firmware
 cargo build --release -p firmware --features advertise-pqc
 ```
 
+## `nix build` (hermetic, no dev shell)
+
+The flake exposes the firmware as a package, so you can build a UF2 without
+entering the dev shell or having a Rust toolchain installed — Nix pins the
+toolchain, the cross target, and every dependency:
+
+```sh
+nix build .#firmware                 # default touch image
+ls result/                           # firmware.elf  firmware.uf2
+```
+
+`result/firmware.uf2` is the same image the dev-shell `cargo build` produces.
+Hermetic, but not yet bit-for-bit reproducible across machines — the build
+path leaks into panic-location strings baked in `.rodata`; cargo's `trim-paths`
+will close that once it stabilizes in the pinned toolchain. The flavors mirror
+the [CI matrix](../.github/workflows/ci.yml):
+
+| Attribute | Image |
+|---|---|
+| `.#firmware` (default) | touch build, YubiKey-5 identity, fw 5.7.4 |
+| `.#firmware-no-touch` | `--no-default-features` (the test build) |
+| `.#firmware-fips` | `--features fips-profile` |
+| `.#firmware-pqc` | `--features advertise-pqc` |
+
+Two caveats:
+
+- **The output is UNSIGNED.** On a secure-boot device you still seal it with
+  your key — the signing key deliberately never enters the build sandbox:
+  ```sh
+  picotool seal --sign --hash result/firmware.uf2 firmware-signed.uf2 \
+      ~/.rs-key-secrets/secure_boot_key.pem ~/.rs-key-secrets/otp_secureboot.json \
+      --major 1 --minor 0
+  ```
+- **The env knobs above are declarative Nix args**, not ambient env. A plain
+  `nix build` bakes the defaults; to customize, pass them to the builder. For a
+  config you reuse, add a one-line preset package (the flake ships
+  `firmware-pico = mkFirmware { name = "firmware-pico"; vidpid = "Pico"; }` as a
+  copy-me example) and build it:
+  ```sh
+  nix build .#firmware-pico
+  ```
+  For a one-off without committing a package, call the exposed builder. (The
+  `--impure` here only lets `getFlake` read the working tree; the knobs
+  themselves are pure — a committed/pushed flakeref needs no flag.)
+  ```sh
+  nix build --impure --expr \
+    '(builtins.getFlake (toString ./.)).lib.${builtins.currentSystem}.mkFirmware
+       { name = "fw"; vidpid = "Nitro3"; fwVersion = "2.0.0"; }'
+  ```
+  Knobs: `vidpid`, `usbVid`, `usbPid`, `fwVersion`, `xoscDelayMult`, `fakeMkek`,
+  `fakeDevk` (mirroring the env vars above). As a convenience each also falls
+  back to the like-named env var, so `VIDPID=Pico nix build --impure .#firmware`
+  works for a quick throwaway — but the declarative arg is the reproducible path
+  and needs no `--impure`.
+
 ## Runtime overrides (phy record)
 
 The rescue applet can store a small config record in flash (`rsk` /
