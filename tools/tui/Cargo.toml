@@ -12,8 +12,8 @@ name = "rsk-tui"
 path = "src/main.rs"
 
 [dependencies]
-ratatui = "0.29"
-crossterm = "0.28"
+ratatui = "0.30"
+crossterm = "0.29"
 pcsc = "2"        # CCID (rescue/vendor applets) over PC/SC
 hidapi = "2"      # FIDO CTAPHID transport
 ciborium = "0.2"  # CTAP2 CBOR encode/decode
