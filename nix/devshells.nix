@@ -66,17 +66,21 @@
     '';
   };
 
-  # Nightly shell for cargo-fuzz: `nix develop .#fuzz -c cargo fuzz run apdu`.
+  # Nightly shell for cargo-fuzz (`cargo fuzz run apdu`) and Miri
+  # (`cargo miri test`, fuzz/tests/miri.rs). The nightly-complete toolchain
+  # carries both; MIRIFLAGS is the policy the Miri suite expects.
   fuzz = pkgs.mkShell {
     packages = [
       fuzzToolchain
       pkgs.cargo-fuzz
     ];
+    MIRIFLAGS = "-Zmiri-many-seeds -Zdeduplicate-diagnostics -Zmiri-strict-provenance";
     shellHook = ''
       echo "rs-key fuzz devshell (nightly)"
       echo "  rustc: $(rustc --version 2>/dev/null)"
       echo "List:   cargo fuzz list"
       echo "Run:    cargo fuzz run <target> -- -max_total_time=30"
+      echo "Miri:   cargo miri test --manifest-path fuzz/Cargo.toml"
     '';
   };
 }
