@@ -1,6 +1,7 @@
 # RS-Key
 
 [![ci](https://github.com/TheMaxMur/RS-Key/actions/workflows/ci.yml/badge.svg)](https://github.com/TheMaxMur/RS-Key/actions/workflows/ci.yml)
+[![deep-checks](https://github.com/TheMaxMur/RS-Key/actions/workflows/deep-checks.yml/badge.svg)](https://github.com/TheMaxMur/RS-Key/actions/workflows/deep-checks.yml)
 
 **RS-Key** (**RSK**, *Raspberry Security Key* — also a pun on "written in Rust")
 is an open-source security-key firmware for the Raspberry Pi **RP2350**. It

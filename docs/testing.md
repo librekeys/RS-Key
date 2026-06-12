@@ -9,6 +9,7 @@ device reserved for end-to-end integration.
 |---|---|---|
 | Host unit tests | parsers, state machines, applets, crypto (~350 tests) | `#[cfg(test)]` in each crate |
 | Fuzzing | the same logic under adversarial bytes | `fuzz/` |
+| Miri | the fuzz targets' logic under the UB checker | `fuzz/tests/miri.rs` |
 | `no_std` build | the crates still link for the device | default `thumbv8m` target |
 | On-device tests | real USB + flash on the board | `tests/*.py` |
 
@@ -61,6 +62,18 @@ check.sh — after changing a shared type, `nix develop .#fuzz -c cargo fuzz
 build` to catch drift. House rule: new attacker-facing parser or dispatch
 surface ⇒ new fuzz target in the same change.
 
+**Miri** runs every target's logic once more as plain tests under the UB
+checker — undefined behavior instead of panics (`fuzz/tests/miri.rs`; the
+`MIRIFLAGS` policy is set by the `.#fuzz` shell):
+
+```sh
+nix develop .#fuzz -c cargo miri test --manifest-path fuzz/Cargo.toml
+```
+
+Neither suite gates a commit. CI runs both weekly — the `deep-checks`
+workflow: the Miri suite, plus a timed libFuzzer pass over every target with
+the corpus carried between runs, crash artifacts uploaded.
+
 ## On-device tests
 
 Numbered, self-contained scripts under `tests/`, run from the dev shell
@@ -92,4 +105,5 @@ upstream checkouts).
 
 `check.sh` is plain bash over the Nix dev shell — a CI job is
 `nix develop -c ./scripts/check.sh` plus, on a runner with the board
-attached, the `tests/` scripts. No hidden state.
+attached, the `tests/` scripts. The scheduled `deep-checks` workflow is the
+two commands from this page, weekly. No hidden state.
