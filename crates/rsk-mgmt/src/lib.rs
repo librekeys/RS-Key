@@ -49,6 +49,11 @@ const INS_RESET: u8 = 0x1E;
 /// OpenPGP reset scopes, so the capability config is sticky.
 const EF_DEV_CONF: u16 = 0x1122;
 
+/// Bytes of `EF_DEV_CONF` that READ CONFIG can echo back — the size of the fixed
+/// buffer it reads into. WRITE CONFIG refuses to persist more (a host config is
+/// a handful of small TLVs), so a read can never slice past the buffer.
+const EF_DEV_CONF_MAX: usize = 64;
+
 pub struct ManagementApplet {
     /// First 4 bytes of the chip id → the 8-digit serial.
     serial: [u8; 4],
@@ -87,10 +92,15 @@ pub fn config_tlv<S: Storage>(serial: &[u8; 4], fs: &mut Fs<S>, res: &mut ResBuf
     let (maj, min, patch) = VERSION;
     push_tlv(&mut buf, &mut n, TAG_VERSION, &[maj, min, patch]);
 
-    let mut conf = [0u8; 64];
+    let mut conf = [0u8; EF_DEV_CONF_MAX];
     match fs.read(EF_DEV_CONF, &mut conf) {
-        Some(len) if len > 0 => {
+        Some(full) if full > 0 => {
             // A host wrote an enabled-applications config — return it verbatim.
+            // `Storage::read` reports the value's *full* length even when it
+            // exceeds the buffer, so clamp before slicing: WRITE CONFIG caps new
+            // writes, but a blob persisted by an older build or a corrupt flash
+            // could still be over-length and must not slice past `conf`/`buf`.
+            let len = full.min(conf.len()).min(buf.len().saturating_sub(n));
             buf[n..n + len].copy_from_slice(&conf[..len]);
             n += len;
         }
@@ -131,6 +141,13 @@ impl ManagementApplet {
     /// TLV blob as `EF_DEV_CONF`.
     fn write_config<S: Storage>(&mut self, apdu: &Apdu, fs: &mut Fs<S>) -> Sw {
         if apdu.nc == 0 || apdu.data[0] as usize != apdu.nc - 1 {
+            return Sw::INCORRECT_PARAMS;
+        }
+        // READ CONFIG echoes this blob back through a fixed `EF_DEV_CONF_MAX`
+        // buffer; refuse to persist more than fits so a read can never slice out
+        // of bounds (an over-length blob would otherwise be a sticky DoS — it
+        // lives in flash and crashes every DeviceInfo query until wiped).
+        if apdu.nc - 1 > EF_DEV_CONF_MAX {
             return Sw::INCORRECT_PARAMS;
         }
         match fs.put(EF_DEV_CONF, &apdu.data[1..apdu.nc]) {
@@ -311,6 +328,44 @@ mod tests {
         assert_eq!(tlv_get(tlv, TAG_USB_ENABLED), Some(&[0x02, 0x02][..]));
         // The default DEVICE_FLAGS/CONFIG_LOCK tail is gone (replaced by the blob).
         assert_eq!(tlv_get(tlv, TAG_CONFIG_LOCK), None);
+    }
+
+    #[test]
+    fn write_config_rejects_oversized_blob() {
+        // An inner blob larger than the read buffer must be refused, so it can
+        // never become a sticky DoS that panics every later READ CONFIG.
+        let mut app = ManagementApplet::new([0; 8]);
+        let mut fs = fs();
+        let inner = EF_DEV_CONF_MAX + 1;
+        let mut cmd = std::vec![
+            0x00,
+            INS_WRITE_CONFIG,
+            0,
+            0,
+            (inner + 1) as u8, // Lc = leading length byte + inner
+            inner as u8        // data[0] = inner (== nc - 1)
+        ];
+        cmd.extend_from_slice(&std::vec![0xAB; inner]);
+        let (sw, _) = process(&mut app, &mut fs, &cmd);
+        assert_eq!(sw, Sw::INCORRECT_PARAMS);
+        // Nothing was persisted.
+        assert!(fs.read(EF_DEV_CONF, &mut [0u8; 8]).is_none());
+    }
+
+    #[test]
+    fn read_config_survives_oversized_stored_blob() {
+        // Regression: READ CONFIG used to slice `&conf[..len]` with `len` =
+        // Storage::read's *full* stored length, so a >64-byte EF_DEV_CONF
+        // panicked. write_config now rejects one, so seed it directly to model a
+        // blob left by an older build or a corrupt flash — the read must clamp,
+        // not panic.
+        let mut app = ManagementApplet::new([0; 8]);
+        let mut fs = fs();
+        fs.put(EF_DEV_CONF, &[0xAB; EF_DEV_CONF_MAX + 16]).unwrap();
+        let (sw, body) = process(&mut app, &mut fs, &[0x00, INS_READ_CONFIG, 0, 0, 0x00]);
+        assert_eq!(sw, Sw::OK);
+        // Well-formed output, nothing sliced out of bounds.
+        assert_eq!(body[0] as usize, body.len() - 1);
     }
 
     #[test]
