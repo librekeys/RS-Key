@@ -185,6 +185,92 @@ pub fn passes_fermat_base2(n_le: &[u8]) -> bool {
     prime
 }
 
+// ------------------------------------------------------- strong Miller-Rabin --
+
+/// Trailing zero bits of a non-zero little-endian value.
+fn trailing_zeros_le(v: &[u8]) -> usize {
+    for (i, &b) in v.iter().enumerate() {
+        if b != 0 {
+            return i * 8 + b.trailing_zeros() as usize;
+        }
+    }
+    v.len() * 8
+}
+
+/// `out_be = v_le >> s`, emitted big-endian (the modexp exponent format);
+/// `out_be.len() == v_le.len()`, high bytes zero-padded.
+fn shr_into_be(v_le: &[u8], s: usize, out_be: &mut [u8]) {
+    let len = v_le.len();
+    let (bytes, bits) = (s / 8, (s % 8) as u32);
+    for i in 0..len {
+        let lo = v_le.get(i + bytes).copied().unwrap_or(0) as u16;
+        let hi = v_le.get(i + bytes + 1).copied().unwrap_or(0) as u16;
+        let b = if bits == 0 {
+            lo
+        } else {
+            (lo >> bits) | (hi << (8 - bits))
+        };
+        out_be[len - 1 - i] = b as u8;
+    }
+}
+
+/// Little-endian value == 1.
+fn is_one_le(v: &[u8]) -> bool {
+    v[0] == 1 && v[1..].iter().all(|&b| b == 0)
+}
+
+/// Strong Miller-Rabin probable-prime test to base 2 — the Miller-Rabin half
+/// of Baillie-PSW — on the (SRAM-resident) asm modexp. `n_le` is the odd
+/// little-endian candidate, length a multiple of 32 bytes, like
+/// [`passes_fermat_base2`] but strictly stronger: write n − 1 = d·2^s (d odd);
+/// n passes iff 2^d ≡ ±1 (mod n) or one of the s − 1 successive squarings
+/// hits n − 1. A chain that reaches 1 any other way has exhibited a
+/// nontrivial square root of 1, i.e. a factor. Mirrors num-bigint-dig's
+/// `probably_prime_miller_rabin(n, 1, force2 = true)` exactly — the host
+/// tests hold the two implementations equal over random candidates and the
+/// canonical pseudoprime families.
+pub fn passes_strong_mr_base2(n_le: &[u8]) -> bool {
+    use zeroize::Zeroize;
+    let len = n_le.len();
+    debug_assert!(len >= 2 && n_le[0] & 1 == 1);
+
+    // n − 1: n is odd, so clearing bit 0 is the whole subtraction.
+    let mut nm1 = [0u8; MAX_MOD];
+    nm1[..len].copy_from_slice(n_le);
+    nm1[0] &= 0xFE;
+
+    // n − 1 = d · 2^s, d odd; the exponent rides big-endian.
+    let s = trailing_zeros_le(&nm1[..len]);
+    let mut d_be = [0u8; MAX_MOD];
+    shr_into_be(&nm1[..len], s, &mut d_be[..len]);
+
+    let mut x = [0u8; MAX_MOD];
+    modexp_priv(&[2u8], &d_be[..len], n_le, &mut x[..len]);
+
+    let mut verdict = is_one_le(&x[..len]) || x[..len] == nm1[..len];
+    if !verdict {
+        for _ in 1..s {
+            // One modular squaring: exponent 2 costs ~two multiplications.
+            let mut sq = [0u8; MAX_MOD];
+            modexp_priv(&x[..len], &[2u8], n_le, &mut sq[..len]);
+            x[..len].copy_from_slice(&sq[..len]);
+            sq.zeroize();
+            if x[..len] == nm1[..len] {
+                verdict = true;
+                break;
+            }
+            if is_one_le(&x[..len]) {
+                break; // nontrivial √1 — certainly composite
+            }
+        }
+    }
+    // For the accepted candidate these hold p − 1 and its power residues.
+    nm1.zeroize();
+    d_be.zeroize();
+    x.zeroize();
+    verdict
+}
+
 // ------------------------------------------------------------- self-test -----
 
 /// A 256-bit prime and a 256-bit odd composite (little-endian), for an on-device
@@ -198,11 +284,15 @@ const KAT_COMPOSITE_LE: [u8; 32] = [
     0xed, 0x8c, 0x41, 0x96, 0xc9, 0xdb, 0x75, 0x94, 0x2d, 0x10, 0xb8, 0xff, 0x48, 0xf0, 0x78, 0xd4,
 ];
 
-/// Known-answer test of the modexp/Fermat path: a known prime must pass the base-2
-/// Fermat test and a known composite must fail it. Catches a wrong asm result
-/// (marshaling / calling-convention bug) before it silently cripples the keygen.
+/// Known-answer test of the modexp path: a known prime must pass and a known
+/// composite must fail BOTH the base-2 Fermat test and the strong Miller-Rabin
+/// gate the keygen actually uses. Catches a wrong asm result (marshaling /
+/// calling-convention bug) before it can weaken the primality decision.
 pub fn self_test() -> bool {
-    passes_fermat_base2(&KAT_PRIME_LE) && !passes_fermat_base2(&KAT_COMPOSITE_LE)
+    passes_fermat_base2(&KAT_PRIME_LE)
+        && !passes_fermat_base2(&KAT_COMPOSITE_LE)
+        && passes_strong_mr_base2(&KAT_PRIME_LE)
+        && !passes_strong_mr_base2(&KAT_COMPOSITE_LE)
 }
 
 #[cfg(test)]
@@ -270,6 +360,74 @@ mod tests {
         let mut want = expect.to_bytes_le();
         want.resize(32, 0);
         assert_eq!(&out[..], &want[..]);
+    }
+
+    #[test]
+    fn strong_mr_matches_num_bigint() {
+        use num_bigint_dig::prime::probably_prime_miller_rabin;
+        // Differential: our strong MR against num-bigint-dig's, single round,
+        // forced base 2 — over random odd top-bit-set candidates (the keygen's
+        // draw shape). Any divergence is a bug in one of the two.
+        let mut state = 0x243F_6A88_85A3_08D3u64;
+        for i in 0..300 {
+            let mut v = [0u8; 32];
+            for b in v.iter_mut() {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                *b = (state >> 33) as u8;
+            }
+            v[0] |= 1;
+            v[31] |= 0x80;
+            let n = BigUint::from_bytes_le(&v);
+            assert_eq!(
+                passes_strong_mr_base2(&v),
+                probably_prime_miller_rabin(&n, 1, true),
+                "differential mismatch at iteration {i} for {n}"
+            );
+        }
+    }
+
+    #[test]
+    fn strong_mr_pseudoprime_families() {
+        use num_bigint_dig::prime::probably_prime_lucas;
+        // The first strong pseudoprimes to base 2 (OEIS A001262) MUST pass the
+        // Miller-Rabin half — Baillie-PSW kills them with the Lucas half.
+        for psp in [2047u32, 3277, 4033, 4681, 8321, 15841] {
+            let mut le = vec![0u8; 32];
+            le[..4].copy_from_slice(&psp.to_le_bytes());
+            assert!(
+                passes_strong_mr_base2(&le),
+                "2-SPSP {psp} must pass strong MR"
+            );
+            assert!(
+                !probably_prime_lucas(&BigUint::from(psp)),
+                "Lucas must reject the 2-SPSP {psp}"
+            );
+        }
+        // Ordinary Carmichael numbers fail the strong test outright.
+        for c in [561u32, 1105, 1729, 6601] {
+            let mut le = vec![0u8; 32];
+            le[..4].copy_from_slice(&c.to_le_bytes());
+            assert!(
+                !passes_strong_mr_base2(&le),
+                "Carmichael {c} must fail strong MR"
+            );
+        }
+        // And the upgrade over the old filter in one number: 341 = 11·31 is a
+        // Fermat base-2 pseudoprime but not a strong one.
+        let mut le = vec![0u8; 32];
+        le[..2].copy_from_slice(&341u16.to_le_bytes());
+        assert!(passes_fermat_base2(&le));
+        assert!(!passes_strong_mr_base2(&le));
+    }
+
+    #[test]
+    fn strong_mr_accepts_real_primes() {
+        let p_le = a_prime_le();
+        assert!(passes_strong_mr_base2(&p_le));
+        assert!(passes_strong_mr_base2(&KAT_PRIME_LE));
+        assert!(!passes_strong_mr_base2(&KAT_COMPOSITE_LE));
     }
 
     #[test]
