@@ -14,11 +14,16 @@ are marked.
   secp256k1 cover practical use. *Status: until a serious crate exists.*
 - **RSA-3072/4096 on-card generation is slow** — the prime search dominates;
   it runs on both cores with the modexp hot path in SRAM
-  ([architecture](architecture.md)). Measured on hardware for RSA-2048:
-  ~8.9 s single-core → ~4.3 s mean (2.07×, n = 10); the single-core 3072/4096
-  figures were ~35 s / ~65 s and scale by a similar factor. The device
-  streams keepalives either way, so tools wait it out. Import is fast.
-  *Status: inherent to the hardware class, now at the two-core limit.*
+  ([architecture](architecture.md)). Measured on hardware against the
+  single-core figures: RSA-2048 ~8.9 s → 4.3 s mean (2.07×, n = 10);
+  RSA-3072 ~35 s → ~22 s (n = 3); RSA-4096 ~65 s → ~48 s median, 57 s mean
+  (n = 8, spread 17–124 s — prime-search luck). The speedup decays with key
+  size because the final Baillie-PSW runs in software per found prime
+  (~10 s+ each at 4096) and does not parallelize within a single find; an
+  asm-backed Miller-Rabin inside that test is the known next lever. The
+  device streams keepalives either way, so tools wait it out. Import is
+  fast. *Status: inherent to the hardware class; the parallel-scan share is
+  at the two-core limit.*
 - **ML-KEM is scaffolding** — compiled, tested, unused: no CTAP PIN/UV
   protocol number for PQC key agreement exists yet to implement.
   *Status: waiting on standards.*
