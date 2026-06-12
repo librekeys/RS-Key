@@ -101,8 +101,9 @@ fn store_slot_cert<S: Storage>(
 }
 
 /// The EC arm of GENERATE; RSA goes through
-/// [`crate::PivApplet::rsa_generate_finish`] (stepped by the firmware so CCID
-/// keepalives flow during the prime search) or the blocking fallback below.
+/// [`crate::PivApplet::rsa_generate_finish`] (the firmware runs the dual-core
+/// prime search, CCID keepalives flowing meanwhile) or the blocking fallback
+/// below.
 pub(crate) fn generate_ec<S: Storage>(
     dev: &Device,
     fs: &mut Fs<S>,

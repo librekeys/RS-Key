@@ -5,7 +5,8 @@ How the firmware is put together — for contributors and the curious.
 ## The big picture
 
 A composite USB device with three interfaces, seven smart-card applets and
-one storage layer, on a single RP2350 core:
+one storage layer. Day to day everything runs on one RP2350 core — the
+second wakes only to parallelize RSA keygen (below):
 
 ```
  USB (embassy-usb, interrupt executor — always responsive)
@@ -33,8 +34,14 @@ wait — blocks only the worker, while the interrupt executor keeps the bus
 enumerated, streams CCID/CTAPHID keepalives, and animates the LED. No
 mutexes: ownership does the synchronization.
 
-**Why one core:** the async executor gives the concurrency the upstream
-design used a second core and hand-rolled queues for. Core 1 stays free.
+**Why (mostly) one core:** the async executor gives the *concurrency* the
+upstream design used a second core and hand-rolled queues for. Core 1 is
+kept out of the transport picture and has exactly one job: during on-card
+RSA generation both cores race the prime search — independent random
+candidates, each core with its own DRBG stream, one shared two-prime pool
+(`firmware/src/core1.rs`) — which roughly halves the expected keygen time.
+Outside keygen it parks in WFE, and embassy-rp pauses it around every flash
+erase/program, so its XIP fetches never collide with flash writes.
 
 ## Crates
 
@@ -104,7 +111,7 @@ with embassy and RustCrypto:
 | mbedTLS | RustCrypto (`p256/p384/p521/k256`, `rsa`, `ed25519-dalek`, …) |
 | TinyCBOR | `minicbor` |
 | bespoke wear-leveled flash writer | `sequential-storage` |
-| core0/core1 + queues | one async executor pair |
+| core0/core1 + queues | one async executor pair; core1 = a keygen math engine only |
 
 Where the two implementations deliberately differ (at-rest sealing, seed
 PIN-wrapping, OTP provisioning policy, several upstream bugs not carried

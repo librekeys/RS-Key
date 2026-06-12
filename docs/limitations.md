@@ -12,9 +12,12 @@ are marked.
 - **X448 / Ed448 (OpenPGP)** — not offered, same reason: RustCrypto coverage
   of Curve448 is thin and unaudited. Cv25519/Ed25519 plus the NIST curves and
   secp256k1 cover practical use. *Status: until a serious crate exists.*
-- **RSA-3072/4096 on-card generation is slow** — ~35 s / ~65 s (the prime
-  search dominates; the device streams keepalives so tools wait it out).
-  Import is fast. *Status: inherent to the hardware class.*
+- **RSA-3072/4096 on-card generation is slow** — the prime search dominates;
+  it runs on both cores ([architecture](architecture.md)), which roughly
+  halves the expected search time against the single-core figures of ~35 s /
+  ~65 s. The device streams keepalives either way, so tools wait it out.
+  Import is fast. *Status: inherent to the hardware class, now at the
+  two-core limit.*
 - **ML-KEM is scaffolding** — compiled, tested, unused: no CTAP PIN/UV
   protocol number for PQC key agreement exists yet to implement.
   *Status: waiting on standards.*

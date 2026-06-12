@@ -155,9 +155,10 @@ fn read_public<S: Storage>(fs: &mut Fs<S>, fid: u16, out: &mut [u8]) -> Result<u
 // --- CCID keepalive path: split RSA generate so the slow keygen can run async ---
 //
 // RSA key generation runs for seconds and would exceed the CCID transaction
-// timeout, so the transport drives [`crate::keys::RsaKeygen`] itself, sending
-// time-extensions between candidates. These two helpers are the bookends; EC
-// generate and read-public stay synchronous in [`keypair_gen`].
+// timeout, so the firmware drives the [`crate::keys::RsaKeygen`] prime search
+// itself (on both RP2350 cores), the transport sending time-extensions between
+// candidates. These two helpers are the bookends; EC generate and read-public
+// stay synchronous in [`keypair_gen`].
 
 /// Validate a GENERATE (0x47) and, for an RSA slot, return `(fid, nbits)` so
 /// the caller can run the keygen asynchronously; `Ok(None)` means EC or

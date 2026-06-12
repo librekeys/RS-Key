@@ -12,7 +12,6 @@ use rsk_mgmt::ManagementApplet;
 use rsk_oath::OathApplet;
 use rsk_openpgp::OpenpgpApplet;
 use rsk_openpgp::consts::INS_KEYPAIR_GEN;
-use rsk_openpgp::keys::{RsaKeygen, RsaStep};
 use rsk_otp::OtpApplet;
 use rsk_piv::PivApplet;
 use rsk_rescue::RescueApplet;
@@ -218,8 +217,8 @@ impl<'a> CcidApplets<'a> {
     /// search + key store to completion and return the response length in
     /// `self.resp`. Returns `None` for everything else (incl. EC generate, which
     /// the dispatcher handles inline) so the caller falls through to normal
-    /// dispatch. The prime search blocks this thread-executor task; the CCID
-    /// transport streams time-extensions meanwhile.
+    /// dispatch. The search runs on BOTH cores ([`crate::core1`]) and blocks this
+    /// thread-executor task; the CCID transport streams time-extensions meanwhile.
     fn try_rsa_keygen(&mut self, apdu: &[u8]) -> Option<usize> {
         if self.disp.current() != Some(IDX_OPENPGP) {
             return None;
@@ -238,20 +237,15 @@ impl<'a> CcidApplets<'a> {
                 // EC slot (Ok(None)) or an error: let normal dispatch handle/report it.
                 _ => return None,
             };
-        let mut kg = RsaKeygen::new(nbits);
-        let key = loop {
-            let step = {
-                let mut rng = self.rng.borrow_mut();
-                kg.step(&mut *rng)
-            };
-            match step {
-                RsaStep::More => continue,
-                RsaStep::Failed => {
-                    self.resp[..2].copy_from_slice(&Sw::EXEC_ERROR.to_bytes());
-                    return Some(2);
-                }
-                RsaStep::Done(key) => break key,
-            }
+        // Both cores search; the worker blocks here while the interrupt
+        // executor streams the CCID time-extensions (and the kbd/LED tasks run).
+        let key = {
+            let mut rng = self.rng.borrow_mut();
+            crate::core1::run_rsa_search(nbits, &mut *rng)
+        };
+        let Some(key) = key else {
+            self.resp[..2].copy_from_slice(&Sw::EXEC_ERROR.to_bytes());
+            return Some(2);
         };
         let (n, sw) = {
             let mut fsb = self.fs.borrow_mut();
@@ -269,9 +263,9 @@ impl<'a> CcidApplets<'a> {
     }
 
     /// The PIV twin of [`Self::try_rsa_keygen`]: PIV GENERATE (INS 0x47,
-    /// P1 = 0x00) with an RSA algorithm runs its prime search here so the CCID
-    /// transport can stream time-extensions. Validation errors fall through to
-    /// normal dispatch for the right status word.
+    /// P1 = 0x00) with an RSA algorithm runs its dual-core prime search here so
+    /// the CCID transport can stream time-extensions. Validation errors fall
+    /// through to normal dispatch for the right status word.
     fn try_piv_rsa_keygen(&mut self, apdu: &[u8]) -> Option<usize> {
         if self.disp.current() != Some(IDX_PIV) {
             return None;
@@ -285,20 +279,14 @@ impl<'a> CcidApplets<'a> {
             self.piv
                 .rsa_generate_params(&mut *fsb, p.p1, p.p2, p.data)?
         };
-        let mut kg = RsaKeygen::new(nbits);
-        let key = loop {
-            let step = {
-                let mut rng = self.rng.borrow_mut();
-                kg.step(&mut *rng)
-            };
-            match step {
-                RsaStep::More => continue,
-                RsaStep::Failed => {
-                    self.resp[..2].copy_from_slice(&Sw::EXEC_ERROR.to_bytes());
-                    return Some(2);
-                }
-                RsaStep::Done(key) => break key,
-            }
+        // Same dual-core search as the OpenPGP arm above.
+        let key = {
+            let mut rng = self.rng.borrow_mut();
+            crate::core1::run_rsa_search(nbits, &mut *rng)
+        };
+        let Some(key) = key else {
+            self.resp[..2].copy_from_slice(&Sw::EXEC_ERROR.to_bytes());
+            return Some(2);
         };
         let (n, sw) = {
             let mut fsb = self.fs.borrow_mut();

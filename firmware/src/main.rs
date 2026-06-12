@@ -4,7 +4,9 @@
 //! Composite USB device: FIDO CTAPHID + CCID smart-card + emulated keyboard.
 //! Two-executor split: USB + the transports run on a high-priority interrupt
 //! executor, the [`worker::Worker`] (slow synchronous applet dispatch) on the
-//! thread executor — so keepalives keep flowing during long crypto.
+//! thread executor — so keepalives keep flowing during long crypto. The second
+//! core joins in for RSA keygen only ([`core1`]): both cores race the prime
+//! search while the transports keep the host alive.
 #![no_std]
 #![no_main]
 
@@ -37,6 +39,7 @@ use rsk_usb::ccid::{ATR_FIDO, Ccid};
 use rsk_usb::ctaphid::{CtapHid, FIDO_REPORT_DESCRIPTOR};
 
 mod ccid_handler;
+mod core1;
 mod flash_storage;
 mod handler;
 mod led;
@@ -275,7 +278,7 @@ async fn main(_spawner: Spawner) {
     config.serial_number = Some("rs-key-0001");
     config.max_power = 100;
     config.max_packet_size_0 = 64;
-    config.device_release = 0x074A; // bcdDevice: our build counter
+    config.device_release = 0x074B; // bcdDevice: our build counter
 
     let mut builder = Builder::new(
         driver,
@@ -409,6 +412,11 @@ async fn main(_spawner: Spawner) {
     // embassy GRB default, which swaps R/G on this board (see led.rs).
     let ws2812 = PioWs2812::with_color_order(&mut common, sm0, p.DMA_CH0, Irqs, led_data, &program);
     hp.spawn(led::led_task(ws2812).unwrap());
+
+    // The second core: an RSA prime-search engine, parked in WFE until a keygen
+    // posts a job (see core1.rs). From here on, embassy-rp's flash driver
+    // pauses/resumes core1 around every erase/program automatically.
+    core1::spawn(p.CORE1);
 
     // The worker runs on this (thread) executor. When it blocks in a long
     // synchronous dispatch the high-priority executor keeps USB alive.
