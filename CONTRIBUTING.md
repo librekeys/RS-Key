@@ -91,6 +91,15 @@ list` reports it, fleet records key on it, and "which build is this key
 actually running" stops being archaeology. Host-only changes (CLI, docs, CI)
 don't bump it.
 
+Don't confuse it with the **anti-rollback epoch** — a separate, much coarser
+number that is *not* in `main.rs`. The epoch is a `picotool seal --rollback N`
+argument applied when you flash, and it advances only for a release a
+downgrade would reopen (a fixed exploitable bug), never per change: the OTP
+thermometer has 48 steps for the board's life. So a PR doesn't "bump" it —
+at most it flags that the next release should. See
+[docs/production.md](docs/production.md#stage-3--anti-rollback-optional),
+stage 3.
+
 ## Tests
 
 - **Host**: `cargo test` across the workspace crates — part of the gate, runs
