@@ -38,6 +38,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use rsk_crypto::HmacDrbg;
 use rsk_openpgp::Rng;
 use rsk_openpgp::keys::{RsaKeygen, RsaPrivateKey, RsaStep};
+use rsk_rsa_asm::IncrementalSieve;
 use static_cell::StaticCell;
 use zeroize::Zeroize;
 
@@ -99,6 +100,15 @@ static MISSES: AtomicU32 = AtomicU32::new(0);
 /// (~6 KiB of fixed buffers); 16 KiB leaves comfortable headroom for the
 /// Baillie-PSW bignum work on top.
 static CORE1_STACK: StaticCell<Stack<16384>> = StaticCell::new();
+
+/// One running small-prime sieve per core (each ~5 KiB — too large to sit on
+/// core1's stack next to the modexp frames, hence static). They are
+/// SINGLE-CORE-EXCLUSIVE: `CORE0_SIEVE` is touched only from `run_rsa_search`
+/// (core0), `CORE1_SIEVE` only from `search` (core1). Since each `&mut` lives
+/// on exactly one core and the two cores never touch the same sieve, there is
+/// no aliasing and no cross-core race — no atomics or lock needed.
+static mut CORE0_SIEVE: IncrementalSieve = IncrementalSieve::new();
+static mut CORE1_SIEVE: IncrementalSieve = IncrementalSieve::new();
 
 /// Liveness counters, readable over the vendor applet (INS 0x12) — the only
 /// window into core1, which has no debugger and no UART: idle-loop wakes and
@@ -206,10 +216,15 @@ fn search(job: &Job) {
         return;
     }
     let mut rng = DrbgRng(HmacDrbg::new(&job.seed));
+    // SAFETY: CORE1_SIEVE is touched only here, on core1. Scrub forces a fresh
+    // window (new job → new size/RNG) and wipes any prime left from the last.
+    let sieve = unsafe { &mut *core::ptr::addr_of_mut!(CORE1_SIEVE) };
+    sieve.scrub();
     while !STOP.load(Ordering::Acquire) {
         C1_TRIES.fetch_add(1, Ordering::Relaxed);
         let mut le = [0u8; MAX_HALF];
-        let Some(len) = RsaKeygen::try_candidate_le(&mut rng, job.half_bytes, &mut le) else {
+        let Some(len) = RsaKeygen::try_candidate_le(sieve, &mut rng, job.half_bytes, &mut le)
+        else {
             continue;
         };
         C1_FINDS.fetch_add(1, Ordering::Relaxed);
@@ -289,6 +304,11 @@ pub fn run_rsa_search(nbits: usize, rng: &mut dyn Rng) -> Option<Box<RsaPrivateK
         cortex_m::asm::sev();
     }
 
+    // SAFETY: CORE0_SIEVE is touched only here, on core0. Scrub forces a fresh
+    // window for this keygen and wipes any prime from the previous one.
+    let sieve = unsafe { &mut *core::ptr::addr_of_mut!(CORE0_SIEVE) };
+    sieve.scrub();
+
     // `Some(Some(key))` = assembled, `Some(None)` = the old `Failed`.
     let mut outcome: Option<Option<Box<RsaPrivateKey>>> = None;
     while outcome.is_none() {
@@ -317,7 +337,7 @@ pub fn run_rsa_search(nbits: usize, rng: &mut dyn Rng) -> Option<Box<RsaPrivateK
         // …then one own candidate (the slow part, one Baillie-PSW).
         C0_TRIES.fetch_add(1, Ordering::Relaxed);
         let mut le = [0u8; MAX_HALF];
-        if let Some(len) = RsaKeygen::try_candidate_le(rng, kg.half_bytes(), &mut le) {
+        if let Some(len) = RsaKeygen::try_candidate_le(sieve, rng, kg.half_bytes(), &mut le) {
             C0_FINDS.fetch_add(1, Ordering::Relaxed);
             match kg.offer_le(&mut le[..len]) {
                 RsaStep::More => {}

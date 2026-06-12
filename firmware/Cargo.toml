@@ -31,10 +31,9 @@ rsk-piv = { workspace = true }
 rsk-rescue = { workspace = true }
 rp-pac = { workspace = true }
 rsk-crypto = { workspace = true }
-# Only the `keygen-bench` vendor command calls into this directly (the keygen
-# primitives are reached through rsk-openpgp otherwise); optional so the
-# default image carries no extra dep.
-rsk-rsa-asm = { workspace = true, optional = true }
+# core1's prime search owns an IncrementalSieve per core, and the keygen-bench
+# vendor command times the primitives directly.
+rsk-rsa-asm = { workspace = true }
 # Zeroize the transient TRNG seed/reseed buffers in `FidoRng` (workspace dep, already
 # pulled by rsk-crypto — no new version).
 zeroize = { workspace = true }
@@ -80,7 +79,7 @@ advertise-pqc = ["rsk-fido/advertise-pqc"]
 fips-profile = ["rsk-fido/fips-profile", "rsk-piv/fips-profile"]
 # Keygen microbenchmark vendor command (INS 0x13). Debug/measurement only —
 # never ship it: it exposes a timing oracle over the primality primitives.
-keygen-bench = ["dep:rsk-rsa-asm"]
+keygen-bench = []
 
 [[bin]]
 name = "firmware"

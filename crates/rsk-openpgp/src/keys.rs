@@ -23,7 +23,7 @@ use p521::ecdsa::signature::hazmat::RandomizedPrehashSigner;
 use num_bigint_dig::prime::probably_prime_lucas;
 use rsa::traits::{PrivateKeyParts, PublicKeyParts};
 use rsa::{BigUint, Pkcs1v15Encrypt, Pkcs1v15Sign};
-use rsk_rsa_asm::{has_small_factor, mod_small, passes_strong_mr_base2, self_test};
+use rsk_rsa_asm::{IncrementalSieve, mod_small, passes_strong_mr_base2, self_test};
 
 // Re-exported so the firmware can name the keygen result type without its own
 // `rsa` dependency (the dual-core search returns `Box<RsaPrivateKey>`).
@@ -733,7 +733,7 @@ impl RsaKeygen {
     /// Draw and test ONE prime candidate of `half_bytes` — the bounded unit of
     /// search work. Stateless (an associated fn), so a second core can run it
     /// concurrently with its own RNG stream. The pipeline is Baillie-PSW split
-    /// across backends: the cheap rejections (small factors, the
+    /// across backends: the cheap rejections (the small-prime sieve, the
     /// `gcd(e, n−1)` check), then the strong Miller-Rabin base-2 gate on the
     /// KAT-gated asm modexp, then the vetted software strong Lucas test for
     /// the final accept. Admitting a composite would take a simultaneous
@@ -741,20 +741,30 @@ impl RsaKeygen {
     /// `probably_prime(_, 0)` gives, with the modexp-heavy half on the fast
     /// path. The caller is responsible for the
     /// [`usable`](RsaKeygen::usable) gate.
-    pub fn try_candidate(rng: &mut dyn Rng, half_bytes: usize) -> Option<BigUint> {
-        let half = half_bytes;
-        // A random odd candidate with the top two bits set, little-endian (so the
-        // product of two such primes has exactly `nbits` bits).
-        let mut cand_le = [0u8; MAX_RSA_BYTES / 2];
-        let b = &mut cand_le[..half];
-        rng.fill(b);
-        b[half - 1] |= 0xC0; // most-significant byte (LE) → top two bits
-        b[0] |= 0x01; // least-significant byte → odd
-        let n = &cand_le[..half];
-
-        if has_small_factor(n) {
-            return None;
+    ///
+    /// `sieve` is a running [`IncrementalSieve`] owned by the caller (one per
+    /// core in the dual-core search): each call advances it by one candidate.
+    /// A call that lands on a composite, or that reseeds an exhausted window,
+    /// returns `None` cheaply; only a sieve survivor pays the modexp + Lucas.
+    pub fn try_candidate(
+        sieve: &mut IncrementalSieve,
+        rng: &mut dyn Rng,
+        half_bytes: usize,
+    ) -> Option<BigUint> {
+        match sieve.step() {
+            None => {
+                // Window exhausted (or never seeded) — draw a fresh random odd
+                // top-two-bits start; this call yields no candidate.
+                let mut seed = [0u8; MAX_RSA_BYTES / 2];
+                rng.fill(&mut seed[..half_bytes]);
+                sieve.reseed(half_bytes, &seed[..half_bytes]);
+                seed.zeroize();
+                return None;
+            }
+            Some(false) => return None, // composite by a small prime — cheap
+            Some(true) => {}            // sieve survivor — run the dear tests
         }
+        let n = sieve.candidate();
         // gcd(e, n − 1) == 1  ⇔  n ≢ 1 (mod e), since e is prime.
         if mod_small(n, RSA_E) == 1 {
             return None;
@@ -764,7 +774,6 @@ impl RsaKeygen {
             return None;
         }
         let cand = BigUint::from_bytes_le(n);
-        cand_le.zeroize();
         // The strong Lucas half (vetted library code). Together with the MR
         // gate above this is exactly `probably_prime(_, 0)` — see the
         // `keygen_bpsw_split_matches_library` test.
@@ -801,8 +810,13 @@ impl RsaKeygen {
     /// second core ships raw bytes, not bignums, so the zeroize discipline
     /// stays in this crate). `out` must hold `half_bytes`; the candidate's top
     /// bits are set, so a find is always exactly `half_bytes` long.
-    pub fn try_candidate_le(rng: &mut dyn Rng, half_bytes: usize, out: &mut [u8]) -> Option<usize> {
-        let mut p = Self::try_candidate(rng, half_bytes)?;
+    pub fn try_candidate_le(
+        sieve: &mut IncrementalSieve,
+        rng: &mut dyn Rng,
+        half_bytes: usize,
+        out: &mut [u8],
+    ) -> Option<usize> {
+        let mut p = Self::try_candidate(sieve, rng, half_bytes)?;
         let mut v = p.to_bytes_le();
         p.zeroize();
         let n = v.len();
@@ -821,12 +835,12 @@ impl RsaKeygen {
 
     /// Draw and test one prime candidate, feeding any find into the pool — the
     /// single-core step: [`try_candidate`](RsaKeygen::try_candidate) then
-    /// [`offer`](RsaKeygen::offer).
-    pub fn step(&mut self, rng: &mut dyn Rng) -> RsaStep {
+    /// [`offer`](RsaKeygen::offer). `sieve` is the caller's running window.
+    pub fn step(&mut self, sieve: &mut IncrementalSieve, rng: &mut dyn Rng) -> RsaStep {
         if !self.usable() {
             return RsaStep::Failed;
         }
-        match Self::try_candidate(rng, self.half_bytes) {
+        match Self::try_candidate(sieve, rng, self.half_bytes) {
             None => RsaStep::More,
             Some(cand) => self.offer(cand),
         }
@@ -838,8 +852,9 @@ impl RsaKeygen {
 /// device the firmware races `try_candidate` on both cores instead.
 pub fn generate_rsa(rng: &mut dyn Rng, nbits: usize) -> Result<RsaPrivateKey, Sw> {
     let mut kg = RsaKeygen::new(nbits);
+    let mut sieve = IncrementalSieve::new();
     loop {
-        match kg.step(rng) {
+        match kg.step(&mut sieve, rng) {
             RsaStep::Done(k) => return Ok(*k),
             RsaStep::Failed => return Err(Sw::EXEC_ERROR),
             RsaStep::More => {}
@@ -1312,12 +1327,13 @@ mod rsa_tests {
         // Smallest asm-eligible half (32 bytes = RSA-512) so the host search is
         // quick; a find must fill the half exactly, odd and with the top bits set.
         let mut rng = SeqRng(42);
+        let mut sieve = IncrementalSieve::new();
         let mut out = [0u8; 32];
         let mut tries = 0;
         let len = loop {
             tries += 1;
-            assert!(tries < 100_000, "prime search did not converge");
-            if let Some(n) = RsaKeygen::try_candidate_le(&mut rng, 32, &mut out) {
+            assert!(tries < 200_000, "prime search did not converge");
+            if let Some(n) = RsaKeygen::try_candidate_le(&mut sieve, &mut rng, 32, &mut out) {
                 break n;
             }
         };
@@ -1333,11 +1349,12 @@ mod rsa_tests {
         // split changed backends, not the test.
         use num_bigint_dig::prime::probably_prime;
         let mut rng = SeqRng(7);
+        let mut sieve = IncrementalSieve::new();
         let (mut found, mut tries) = (0, 0);
         while found < 2 {
             tries += 1;
-            assert!(tries < 100_000, "prime search did not converge");
-            if let Some(p) = RsaKeygen::try_candidate(&mut rng, 32) {
+            assert!(tries < 200_000, "prime search did not converge");
+            if let Some(p) = RsaKeygen::try_candidate(&mut sieve, &mut rng, 32) {
                 assert!(
                     probably_prime(&p, 0),
                     "split BPSW accepted what the library rejects"

@@ -1474,8 +1474,9 @@ mod tests {
         assert_eq!(fid, consts::EF_PK_SIG);
 
         let mut kg = keys::RsaKeygen::new(nbits);
+        let mut sieve = rsk_rsa_asm::IncrementalSieve::new();
         let key = loop {
-            match kg.step(&mut *rng.borrow_mut()) {
+            match kg.step(&mut sieve, &mut *rng.borrow_mut()) {
                 keys::RsaStep::Done(k) => break k,
                 keys::RsaStep::Failed => panic!("keygen failed"),
                 keys::RsaStep::More => {}
@@ -1572,8 +1573,9 @@ mod tests {
         assert_eq!(nbits, 4096);
 
         let mut kg = keys::RsaKeygen::new(nbits);
+        let mut sieve = rsk_rsa_asm::IncrementalSieve::new();
         let key = loop {
-            match kg.step(&mut *rng.borrow_mut()) {
+            match kg.step(&mut sieve, &mut *rng.borrow_mut()) {
                 keys::RsaStep::Done(k) => break k,
                 keys::RsaStep::Failed => panic!("keygen failed"),
                 keys::RsaStep::More => {}
