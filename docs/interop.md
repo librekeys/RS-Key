@@ -84,7 +84,7 @@ accordingly:
 |---|---|---|---|---|
 | `fido2-token -L` / `-I` (libfido2) | enumeration + getInfo | no-touch | `tests/interop/run.py` | ✅ `0759` |
 | `fido2-cred` / `fido2-assert` (libfido2) | make credential / get assertion | touch | manual (`fido2-cred -M` ‖ `fido2-assert -G`) | ✅ `0759` (touch ×2, assertion verified `2026-06-13`) |
-| python-fido2 (Yubico) | full CTAP2 flows | **no-touch** build | `pytest third_party/pico-fido-tests/pico-fido` | ⚠️ `075A` (**191 passed** / 4 failed / 9 errored, 8m26s — **all 4 fails triaged as test-side, not firmware defects**: `test_lockout`/`test_pin_attempts` need a manual `device.reboot()` (conftest.py:205 human prompt, unanswered headless → our spec-correct `PIN_AUTH_BLOCKED` correctly persists); `test_option_up` calls `doGA(options=…)` — no such kwarg, broken upstream test; `test_bad_auth` expects pico-fido's `0xE0` for an invalid `(0,0)` EC keyAgreement where our `INVALID_PARAMETER` is spec-reasonable. 9 errors = `test_070_oath` fixture setup, not core CTAP2) |
+| python-fido2 (Yubico) | full CTAP2 flows | **no-touch** build | `pytest third_party/pico-fido-tests/pico-fido` | ⚠️ `075A` — 191 passed / 4 failed / 9 errored; [all test-side, not firmware defects](#suite-triage) |
 | Chrome WebAuthn | register + authenticate | touch | [webauthn.io](https://webauthn.io) (manual) | ✅ user-attested (macOS/Linux/Win, `2026-06-13`) |
 | Firefox WebAuthn | register + authenticate | touch | [webauthn.io](https://webauthn.io) (manual) | ✅ user-attested (macOS/Linux/Win, `2026-06-13`) |
 | Safari WebAuthn | register + authenticate | touch | [webauthn.io](https://webauthn.io) (manual) | ✅ user-attested (`2026-06-13`) |
@@ -97,7 +97,7 @@ accordingly:
 | `gpg --card-status` | application-related-data read | either | `tests/interop/run.py` | ✅ `0759` |
 | `gpg --edit-card` keygen/sign/encrypt | full card lifecycle | touch (UIF) | manual | ✅ `075A` (EC+RSA `generate` land on-card after the [GET DATA short-Le fix](#get-data-short-le-chaining-fixed-on-0x075a); was ❌ on `0759`) |
 | `ykman openpgp info` | `Tlv.unpack(0x6E, …)` strict parse | either | `tests/interop/run.py` | ✅ `0759` (was ❌ on `0758`) |
-| openpgp-card-tests (Gnuk-derived) | spec suite | no-touch | `pytest third_party/openpgp-card-tests/…` | ⚠️ `075A` (`001_initial_check` 31/34; the 3 fails — `6E`, `65`, `7A` — share one root: `util.get_data_object` strips the constructed-DO wrapper only when `is_yubikey=True` (never set in this Gnuk config), so our deliberately-wrapped templates (the bug-#1 ykman/real-Yubikey requirement) fail the Gnuk "unwrapped" asserts. Not a defect — wrapping is mandatory for ykman; the two expectations are mutually exclusive) |
+| openpgp-card-tests (Gnuk-derived) | spec suite | no-touch | `pytest third_party/openpgp-card-tests/…` | ⚠️ `075A` — `001_initial_check` 31/34; [3 fails, one root, not a defect](#suite-triage) |
 
 ### PIV
 
@@ -112,9 +112,37 @@ accordingly:
 | Consumer | What it exercises | Build | How | Status |
 |---|---|---|---|---|
 | `ykman oath accounts list` | OATH credential listing | no-touch | `tests/interop/run.py` | ✅ `0759` |
-| Yubico Authenticator (app) | TOTP/HOTP GUI | no-touch | manual (desktop app) | ✅ `075A` (detects the key + all 6 apps [OTP/PIV/OATH/OpenPGP/U2F/FIDO2]; OATH add → calculate → delete all work in-GUI; the displayed TOTP `111429` then `629022` **cryptographically matched** an independent software HMAC-SHA1 TOTP of the same secret/window, `2026-06-13`) |
+| Yubico Authenticator (app) | TOTP/HOTP GUI | no-touch | manual (desktop app) | ✅ `075A` — detects the key + all 6 apps; OATH add/calc/delete work; [TOTP crypto-verified](#suite-triage) (`2026-06-13`) |
 | `ykman otp info` | OTP slot state | no-touch | `tests/interop/run.py` | ✅ `0759` |
 | OTP keyboard (types the code) | USB-HID keyboard emulation | touch | manual (focus a text field) | ✅ `0759` (short-tap typed the static slot verbatim, `2026-06-13`) |
+
+## Suite triage
+
+Detail for the ⚠️ / multi-result cells above.
+
+**python-fido2 (Yubico) — `075A`, 191 passed / 4 failed / 9 errored (8m26s).** All
+four failures are test-side, not firmware defects:
+
+- `test_lockout` / `test_pin_attempts` need a manual `device.reboot()`
+  (conftest.py:205 human prompt, unanswered headless) → our spec-correct
+  `PIN_AUTH_BLOCKED` correctly persists.
+- `test_option_up` calls `doGA(options=…)` — no such kwarg; broken upstream test.
+- `test_bad_auth` expects pico-fido's `0xE0` for an invalid `(0,0)` EC
+  keyAgreement, where our `INVALID_PARAMETER` is spec-reasonable.
+- The 9 errors are `test_070_oath` fixture setup, not core CTAP2.
+
+**openpgp-card-tests (Gnuk-derived) — `075A`, `001_initial_check` 31/34.** The
+3 fails (`6E`, `65`, `7A`) share one root and are not a defect:
+`util.get_data_object` strips the constructed-DO wrapper only when
+`is_yubikey=True` (never set in this Gnuk config), so our deliberately-wrapped
+templates (the bug-#1 ykman/real-Yubikey requirement) fail the Gnuk "unwrapped"
+asserts. Wrapping is mandatory for ykman; the two expectations are mutually
+exclusive.
+
+**Yubico Authenticator (app) — `075A`.** Detects the key + all 6 apps
+(OTP/PIV/OATH/OpenPGP/U2F/FIDO2); OATH add → calculate → delete all work in-GUI.
+The displayed TOTP `111429` then `629022` cryptographically matched an
+independent software HMAC-SHA1 TOTP of the same secret/window (`2026-06-13`).
 
 ## Known issues
 

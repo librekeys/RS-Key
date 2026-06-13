@@ -234,10 +234,7 @@ that builds the hermetic firmware twice and requires bit-identical outputs
 
 ```mermaid
 flowchart TB
-    subgraph commit["Every commit / PR — the merge gate"]
-      c["check.sh: fmt · clippy · host tests · firmware builds · audit · deny · gitleaks"]
-    end
-    subgraph weekly["Weekly — deep-checks"]
-      w["Miri · timed libFuzzer · Kani · repro (bit-identical build)"]
-    end
+    a["Merge gate — every commit / PR<br/>check.sh: fmt · clippy · host tests · firmware builds · audit · deny · gitleaks"]
+    b["Weekly — deep-checks<br/>Miri · timed libFuzzer · Kani · repro (bit-identical build)"]
+    a ~~~ b
 ```

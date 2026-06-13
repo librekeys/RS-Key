@@ -7,8 +7,8 @@ ones before it.
 ```mermaid
 flowchart TB
     attacker["Attacker-controlled USB bytes"]
-    oos["Out of scope:<br/>physical / lab attacks · a compromised, unlocked host"]
-    subgraph rp["RP2350 — NOT a secure element"]
+    oos["Out of scope:<br/>physical / lab attacks · a compromised, unlocked host<br/>(the RP2350 is not a secure element)"]
+    subgraph rp["RP2350"]
       parse["Memory-safe parsers<br/>(safe Rust + fuzzing)"]
       gates["Protocol gates<br/>PIN/UV · touch · mgmt-key"]
       keys["Key material"]

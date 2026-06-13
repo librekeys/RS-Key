@@ -12,7 +12,7 @@ second wakes only to parallelize RSA keygen (below):
 
 ```mermaid
 flowchart TD
-    subgraph irq["Interrupt executor — high priority, stays responsive"]
+    subgraph irq["Interrupt executor"]
       fido["FIDO HID<br/>(0xF1D0, CTAPHID)"]
       ccid["CCID<br/>(class 0x0B, APDU)"]
       kbd["Boot keyboard<br/>(OTP typing)"]
@@ -20,7 +20,7 @@ flowchart TD
     fido --> worker
     ccid --> worker
     kbd --> worker
-    subgraph thread["Thread executor — may block for seconds"]
+    subgraph thread["Thread executor"]
       worker["worker task<br/>owns flash + TRNG"]
       worker --> applets["Applets<br/>FIDO2/U2F · OpenPGP · PIV · OATH<br/>OTP · mgmt · vendor + rescue"]
     end
