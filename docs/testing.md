@@ -104,7 +104,15 @@ crypto-critical helpers, where a proof genuinely beats a sample:
   sieve) for every seed.
 - `rsk-crypto` — the `base64url` length helpers (`encoded_len` / `decoded_len`)
   panic-free (no overflow/underflow) and mutually inverse for every length up
-  to 64 KiB.
+  to 64 KiB; `encode∘decode == id` for every input up to 9 bytes (every
+  `len % 3` tail, with and without preceding full chunks); `decode` panic-free
+  over every byte string up to 8 chars.
+- `rsk-rescue` — the `phy` device-configuration record: `parse` total over
+  every byte string up to 12 bytes (and always materializes an interface
+  mask); `serialize∘parse == id` for every `PhyData` — every field-presence
+  combination and value, product strings up to 4 bytes — modulo the documented
+  missing-ENABLED_USB_ITF→ALL normalization, with `PHY_MAX_SIZE` sufficiency
+  proven en route.
 
 Kani is **not** in nixpkgs and its setup downloads a prebuilt CBMC bundle, so
 this is the one deliberately non-nix tool (install once, outside the dev
@@ -112,7 +120,7 @@ shell):
 
 ```sh
 cargo install --locked kani-verifier && cargo kani setup
-cargo kani -p rsk-sdk -p rsk-fs -p rsk-rsa-asm -p rsk-crypto
+cargo kani -p rsk-sdk -p rsk-fs -p rsk-rsa-asm -p rsk-crypto -p rsk-rescue
 ```
 
 The proofs are bounded, and the bound is the honest fine print. A 16–20-byte

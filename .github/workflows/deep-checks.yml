@@ -16,7 +16,7 @@
 # and self-tests on any push that edits this file. Local equivalents:
 #   nix develop .#fuzz -c cargo miri test --manifest-path fuzz/Cargo.toml
 #   nix develop .#fuzz -c cargo fuzz run <target> -- -max_total_time=120
-#   cargo kani -p rsk-sdk -p rsk-fs -p rsk-rsa-asm -p rsk-crypto  (cargo install kani-verifier)
+#   cargo kani -p rsk-sdk -p rsk-fs -p rsk-rsa-asm -p rsk-crypto -p rsk-rescue  (cargo install kani-verifier)
 
 name: deep-checks
 
@@ -167,4 +167,4 @@ jobs:
           cargo kani setup
 
       - name: prove every harness
-        run: cargo kani -p rsk-sdk -p rsk-fs -p rsk-rsa-asm -p rsk-crypto
+        run: cargo kani -p rsk-sdk -p rsk-fs -p rsk-rsa-asm -p rsk-crypto -p rsk-rescue
