@@ -945,6 +945,86 @@ fn miri_mgmt_config() {
 }
 
 // =========================================================================
+// cross_applet
+// =========================================================================
+
+#[test]
+fn miri_cross_applet() {
+    use core::cell::RefCell;
+    use rsk_mgmt::ManagementApplet;
+    use rsk_oath::OathApplet;
+    use rsk_openpgp::OpenpgpApplet;
+    use rsk_otp::OtpApplet;
+    use rsk_piv::PivApplet;
+    use rsk_sdk::Dispatcher;
+
+    struct R(u64);
+    impl rsk_openpgp::Rng for R {
+        fn fill(&mut self, b: &mut [u8]) {
+            for x in b.iter_mut() {
+                self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1);
+                *x = (self.0 >> 33) as u8;
+            }
+        }
+    }
+    impl rsk_oath::Rng for R {
+        fn fill(&mut self, b: &mut [u8]) {
+            for x in b.iter_mut() {
+                self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1);
+                *x = (self.0 >> 33) as u8;
+            }
+        }
+    }
+
+    fn sel(aid: &[u8]) -> std::vec::Vec<u8> {
+        let mut v = std::vec![0x00u8, 0xA4, 0x04, 0x00, aid.len() as u8];
+        v.extend_from_slice(aid);
+        v
+    }
+
+    const SID: [u8; 8] = [0x12, 0x34, 0x56, 0x78, 1, 2, 3, 4];
+    const SH: [u8; 32] = [0x22; 32];
+
+    let mut fs = Fs::new(RamStorage::new(), &[]);
+    fs.scan();
+    let rng = RefCell::new(R(1));
+    let pgp_pres = RefCell::new(rsk_openpgp::AlwaysConfirm);
+    let oath_pres = RefCell::new(rsk_oath::AlwaysConfirm);
+    let otp_pres = RefCell::new(rsk_otp::AlwaysConfirm);
+    let mut openpgp = OpenpgpApplet::new(SID, SH, None, &rng, &pgp_pres);
+    let mut management = ManagementApplet::new(SID);
+    let mut oath = OathApplet::new(SID, SH, None, &rng, &oath_pres);
+    let mut otp = OtpApplet::new(SID, &otp_pres);
+    let mut piv = PivApplet::new(SID, SH, None, &rng, &pgp_pres);
+    let mut disp = Dispatcher::new();
+    let mut applets: [&mut dyn Applet<Fs<RamStorage>>; 5] =
+        [&mut openpgp, &mut management, &mut oath, &mut otp, &mut piv];
+
+    // Switch through every applet, do a benign op on each, then exercise the
+    // chaining seam (a chained segment followed by a SELECT — the dispatcher
+    // absorbs the SELECT as the final chained command).
+    let seq: std::vec::Vec<std::vec::Vec<u8>> = std::vec![
+        sel(rsk_openpgp::consts::OPENPGP_AID),
+        std::vec![0x00, 0xCA, 0x00, 0x6E, 0x00], // openpgp GET DATA
+        sel(rsk_piv::PIV_AID),
+        std::vec![0x00, 0xCB, 0x3F, 0xFF, 0x05, 0x5C, 0x03, 0x5F, 0xC1, 0x06], // piv GET DATA
+        sel(rsk_mgmt::MANAGEMENT_AID),
+        std::vec![0x00, 0x1C, 0x00, 0x00, 0x05, 0x04, 0x03, 0x02, 0x02, 0x02], // write config
+        std::vec![0x00, 0x1D, 0x00, 0x00, 0x00],                               // read config
+        sel(rsk_oath::OATH_AID),
+        std::vec![0x00, 0xA1, 0x00, 0x00, 0x00], // oath list
+        sel(rsk_otp::OTP_AID),
+        std::vec![0x10, 0x01, 0x00, 0x00, 0x03, 0xAA, 0xBB, 0xCC], // a chained segment …
+        sel(rsk_piv::PIV_AID),                                     // … then SELECT mid-chain
+    ];
+    let mut resp = [0u8; 2048];
+    for raw in &seq {
+        let mut res = ResBuf::new(&mut resp);
+        let _ = disp.process(raw, &mut applets, &mut fs, &mut res);
+    }
+}
+
+// =========================================================================
 // oath_apdu
 // =========================================================================
 

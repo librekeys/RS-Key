@@ -53,6 +53,15 @@ the phy TLV codec (parse∘serialize round-trip is an asserted invariant), the
 PIN protocols, AEADs, the DRBG, ML-DSA/ML-KEM decoding, and the seed-blob
 format/migration state machine.
 
+Most targets drive one applet from a fresh state. One — `cross_applet` — is
+**stateful**: it wires the real `Dispatcher` to the OpenPGP / Management / OATH
+/ OTP / PIV set over a single shared `Fs`, then replays an attacker-chosen
+*sequence* of APDUs, so SELECT switches, command chaining and the file system
+persist across commands. It hunts the seams a per-applet target can't reach —
+state leaking between applets, a SELECT mid-chain, one applet's FID colliding
+with another's. (GENERATE is skipped, as on device the RSA prime search is
+fast-pathed off the dispatcher.)
+
 ```sh
 nix develop .#fuzz -c cargo fuzz list
 nix develop .#fuzz -c cargo fuzz run <target> -- -max_total_time=60
