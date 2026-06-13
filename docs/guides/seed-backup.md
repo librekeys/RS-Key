@@ -36,11 +36,11 @@ re-exported either — pick a SLIP-39 share count with margin (2-of-3 minimum,
 ```mermaid
 stateDiagram-v2
     [*] --> NoSeed
-    NoSeed --> Open: first boot / factory reset (new seed)
-    Open --> Open: rsk backup export (words)
+    NoSeed --> Open: first boot / factory reset
     Open --> Finalized: rsk backup finalize
-    Finalized --> Finalized: export refused
     Finalized --> NoSeed: factory reset (new seed)
+    note right of Open: rsk backup export (while open)
+    note right of Finalized: export refused until reset
 ```
 
 ## Restore (onto any RS-Key board)

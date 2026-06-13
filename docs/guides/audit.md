@@ -37,11 +37,11 @@ aggregate even though its details are gone. The chain head is
 `fold(epoch, window)`.
 
 ```mermaid
-flowchart LR
+flowchart TD
     e["new event"] --> chain["SHA-256 hash chain (window)"]
-    chain -->|ring full| fold["fold oldest into<br/>epoch accumulator"]
+    chain -->|ring full| fold["fold oldest into epoch accumulator"]
     fold --> reuse["slot reused"]
-    chain --> head["chain head =<br/>fold(epoch, window)"]
+    chain --> head["chain head = fold(epoch, window)"]
 ```
 
 `rsk audit verify` sends a fresh 16-byte challenge; the device signs

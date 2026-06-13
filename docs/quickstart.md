@@ -7,10 +7,12 @@ From zero to a working security key in about ten minutes.
 > see the [threat model](threat-model.md) before using it for anything real.
 
 ```mermaid
-flowchart LR
-    a["nix develop<br/>cargo build"] --> b["firmware.uf2"]
-    b --> c["hold BOOT,<br/>plug in"] --> d["copy .uf2 to<br/>RP2350 drive"]
-    d --> e["board reboots,<br/>enumerates over USB"] --> f["set PIN,<br/>enroll a passkey / ssh key"]
+flowchart TD
+    a["nix develop · cargo build"] --> b["firmware.uf2"]
+    b --> c["hold BOOT, plug in"]
+    c --> d["copy .uf2 to the RP2350 drive"]
+    d --> e["board reboots, enumerates over USB"]
+    e --> f["set PIN, enroll a passkey / ssh key"]
 ```
 
 ## What you need

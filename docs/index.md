@@ -19,9 +19,9 @@ for development, research, and controlled experiments.
 > trusting it with anything real.
 
 ```mermaid
-flowchart LR
-    user[You] --> tools["Host tools<br/>browser · ssh · gpg · ykman · rsk"]
-    tools -->|USB| dev["RS-Key firmware<br/>(applets)"]
+flowchart TD
+    user["You"] --> tools["Host tools<br/>browser · ssh · gpg · ykman · rsk"]
+    tools -->|USB| dev["RS-Key firmware (applets)"]
     dev --> hw["RP2350 board<br/>flash · TRNG · OTP"]
 ```
 

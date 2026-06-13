@@ -80,7 +80,7 @@ foreign-signed images do not boot — the chip falls back to BOOTSEL, where you
 can always drag a correctly-signed UF2 (recovery path).
 
 ```mermaid
-flowchart LR
+flowchart TD
     build["cargo / nix build"] --> uf2["firmware.uf2"]
     uf2 --> seal["picotool seal --sign<br/>signing key (host-only)"]
     seal --> signed["firmware-signed.uf2"]

@@ -15,11 +15,11 @@ device reserved for end-to-end integration.
 | On-device tests | real USB + flash on the board | `tests/*.py` |
 
 ```mermaid
-flowchart LR
+flowchart TD
     u["Host unit tests"] --> f["Fuzzing"] --> m["Miri"] --> k["Kani proofs"] --> n["no_std build"] --> d["On-device tests"]
 ```
 
-Left to right: fast and host-only, tapering to slow and needs-a-board.
+Top to bottom: fast and host-only, tapering to slow and needs-a-board.
 
 ## The one command
 

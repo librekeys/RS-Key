@@ -11,13 +11,9 @@ Linux:
 | **CCID** (PC/SC) | OpenPGP, PIV, OATH, Yubico-OTP, `ykman`, `gpg --card-status` | needs `pcscd` running **and** a polkit rule to use it as a non-root / SSH-session user |
 
 ```mermaid
-flowchart LR
-    subgraph fido["FIDO HID — usually works out of the box"]
-      a["WebAuthn · ssh-sk · fido2-token"] --> b["hidraw + yubico udev rules"]
-    end
-    subgraph ccid["CCID (PC/SC) — needs two pieces"]
-      c["ykman · gpg · OpenPGP / PIV / OATH"] --> d["pcscd + polkit rule<br/>(+ disable-ccid for gpg)"]
-    end
+flowchart TD
+    a["FIDO HID<br/>WebAuthn · ssh-sk · fido2-token"] --> b["hidraw + yubico udev rules<br/>(usually works out of the box)"]
+    c["CCID (PC/SC)<br/>ykman · gpg · OpenPGP / PIV / OATH"] --> d["pcscd + polkit rule<br/>(+ disable-ccid for gpg)<br/>— needs both pieces"]
 ```
 
 FIDO generally works after installing the standard yubico udev rules. CCID is

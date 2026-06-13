@@ -11,8 +11,8 @@ picotool uf2 convert target/thumbv8m.main-none-eabihf/release/firmware -t elf fi
 ```
 
 ```mermaid
-flowchart LR
-    knobs["env knobs +<br/>cargo features"] --> build["cargo build<br/>(or nix build)"]
+flowchart TD
+    knobs["env knobs + cargo features"] --> build["cargo build (or nix build)"]
     build --> elf["firmware.elf"]
     elf --> conv["picotool uf2 convert"]
     conv --> uf2["firmware.uf2"]
@@ -147,10 +147,10 @@ record over CCID.
 The effective identity is resolved in this order:
 
 ```mermaid
-flowchart LR
-    a["VIDPID preset"] --> b["USB_VID / USB_PID<br/>raw override (compile time)"]
-    b --> c["phy record<br/>(runtime, at boot)"]
-    c --> d["effective VID/PID<br/>+ product string"]
+flowchart TD
+    a["VIDPID preset"] --> b["USB_VID / USB_PID raw override (compile time)"]
+    b --> c["phy record (runtime, at boot)"]
+    c --> d["effective VID/PID + product string"]
 ```
 
 ## Notes
