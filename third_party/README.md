@@ -5,13 +5,20 @@ without checking out the upstream repos. They are **not** part of RS-Key's
 own test suite (`tests/`, `cargo test`) — they are the upstream ecosystems'
 own tests, kept runnable against this implementation.
 
-Both directories carry their own licenses (each `LICENSE` file), distinct
-from the repository's own AGPL-3.0-only:
+Both directories carry their own licenses, distinct from the repository's own
+AGPL-3.0-only. Note the split between each file's **per-file header** (the
+operative license for that file) and the **bundled `LICENSE`** (the upstream
+repo's top-level license file):
 
-| Directory | Origin | License |
-|---|---|---|
-| `pico-fido-tests/` | [polhenarejos/pico-fido](https://github.com/polhenarejos/pico-fido) `tests/` | AGPL-3.0 (their LICENSE) |
-| `openpgp-card-tests/` | [polhenarejos/pico-openpgp](https://github.com/polhenarejos/pico-openpgp) `tests/`, derived from [Gnuk](https://www.fsij.org/gnuk/) (NIIBE Yutaka / g10 Code GmbH) | GPL (see file headers + their LICENSE) |
+| Directory | Origin | License (per-file headers) | Bundled `LICENSE` |
+|---|---|---|---|
+| `pico-fido-tests/` | [polhenarejos/pico-fido](https://github.com/polhenarejos/pico-fido) `tests/` | **GPL-3.0-only** (headers read "GNU General Public License … version 3") | AGPL-3.0 (pico-fido's repo LICENSE) |
+| `openpgp-card-tests/` | [polhenarejos/pico-openpgp](https://github.com/polhenarejos/pico-openpgp) `tests/`, derived from [Gnuk](https://www.fsij.org/gnuk/) (NIIBE Yutaka / g10 Code GmbH) | **GPL-3.0-or-later** (Gnuk headers: "either version 3 … or any later version") | AGPL-3.0 |
+
+These suites are **run-only** (pytest/pyscard) — they are never compiled or
+linked into the firmware, and every upstream header is preserved verbatim, so
+the GPL/AGPL split above does not interact with RS-Key's own AGPL-3.0-only
+build.
 
 Local modifications are minimal and marked in-place; the notable one:
 `pico-fido-tests/conftest.py` filters the relying-party's allowed algorithms

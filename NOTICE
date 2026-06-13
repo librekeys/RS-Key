@@ -7,12 +7,17 @@ Licensed under the GNU Affero General Public License, version 3 only
 RS-Key is a from-scratch Rust reimplementation of the pico-keys firmware
 family by Pol Henarejos — pico-fido, pico-openpgp and pico-keys-sdk
 (https://github.com/polhenarejos) — which is licensed under the GNU
-Affero General Public License v3. The protocol behaviour, file layouts
-and applet semantics follow that work; the Rust implementation, the
-embassy-based runtime and the host tooling are original to this project.
+Affero General Public License, version 3 ONLY (AGPL-3.0-only; verified
+from the upstream source headers, which read "version 3" with no "or any
+later version"). RS-Key inherits and preserves that exact version: it
+cannot be relicensed to a later AGPL version or to a permissive license.
+The protocol behaviour, file layouts and applet semantics follow that
+work; the Rust implementation, the embassy-based runtime and the host
+tooling are original to this project.
 
-rsk-wipe is a Rust port of polhenarejos/pico-nuke, itself derived from
-the Raspberry Pi pico-examples flash_nuke utility.
+rsk-wipe is a Rust port of polhenarejos/pico-nuke (GPL-3.0), itself
+derived from the Raspberry Pi pico-examples flash_nuke utility
+(BSD-3-Clause).
 
 This product is not affiliated with, or endorsed by, Yubico, Nitrokey or
 Raspberry Pi. The default USB identity mimics a YubiKey for local tool

@@ -155,6 +155,8 @@ Details and reasoning: [docs/limitations.md](docs/limitations.md).
 
 ## License
 
-**AGPL-3.0-only** — see [LICENSE](LICENSE) and [NOTICE](NOTICE). RS-Key is a
-derivative of AGPL-licensed pico-keys; it stays AGPL, and so must forks.
+**AGPL-3.0-only** — see [LICENSE](LICENSE), [NOTICE](NOTICE) and
+[COMPLIANCE.md](COMPLIANCE.md). RS-Key is a behavioral reimplementation of
+AGPL-3.0-**only** pico-keys; the upstream grant is version-3-only (verified
+from its source headers), so RS-Key is too — it stays AGPL, and so must forks.
 Not affiliated with or endorsed by Yubico, Nitrokey or Raspberry Pi.
