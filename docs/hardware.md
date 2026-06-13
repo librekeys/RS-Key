@@ -38,6 +38,20 @@ env FLASH_SIZE=8M LED_PIN=25 cargo build --release -p firmware
 So most RP2350A boards work with at most a one-line change. Everything else
 (USB descriptors, applets, flash layout) is board-independent.
 
+## Enclosures
+
+A bare board works fine, but a printed case makes it pocketable. Two community
+designs fit the boards above:
+
+- **[Waveshare RP2040-One / RP2350-One case](https://www.printables.com/model/1129764-waveshare-rp2040-one-and-rp2350-one-case)**
+  by Patrick van der Leer — sized for the reference board.
+- **[RP2350 USB case](https://www.printables.com/model/1248338-rp2350-usb-case)**
+  by Vladimir Varzaru (a remix of Patrick's design) — a slimmer USB-stick form.
+
+Both are licensed **CC BY-SA 4.0**: print, sell, and remix them freely, as long
+as you credit the authors and keep any derivative under the same license. They
+are third-party designs, linked for convenience — not part of this project.
+
 ## What the hardware does not give you
 
 The OTP fuses and secure boot ([production.md](production.md)) are real
