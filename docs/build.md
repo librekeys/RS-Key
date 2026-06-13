@@ -34,8 +34,9 @@ flowchart TD
 
 | Variable | Default | Values | Effect |
 |---|---|---|---|
-| `VIDPID` | `Yubikey5` | `Yubikey5`, `YubikeyNeo`, `YubiHSM`, `NitroHSM`, `NitroFIDO2`, `NitroStart`, `NitroPro`, `Nitro3`, `Gnuk`, `GnuPG`, `Pico`, `Dev` | USB VID/PID preset. The default `Yubikey5` (`0x1050:0x0407`) is what makes `ykman`, Yubico Authenticator and the stock udev rules work. `Pico` = the Raspberry Pi generic id (`0x2E8A:0x10FD`); `Dev` = a placeholder (`0xFEFF:0xFCFD`). An unknown preset fails the build. **These vendor-mimicking ids are for local interop only — never distribute hardware carrying them.** |
+| `VIDPID` | `RSKey` | `RSKey`, `Yubikey5`, `YubikeyNeo`, `YubiHSM`, `NitroHSM`, `NitroFIDO2`, `NitroStart`, `NitroPro`, `Nitro3`, `Gnuk`, `GnuPG`, `Pico`, `Dev` | USB VID/PID preset. The default `RSKey` (`0x1209:0x0001`) is this project's own [pid.codes](https://pid.codes/) identity — not a masquerade. The opt-in `Yubikey5` (`0x1050:0x0407`) instead presents Yubico's VID/PID **and** swaps the descriptor strings to `Yubico` / `YubiKey RSK …` — that is what makes `ykman`, Yubico Authenticator and the stock Yubico udev rules recognize the device; build it only for local interop / the interop suite. `Pico` = the Raspberry Pi generic id (`0x2E8A:0x10FD`); `Dev` = a non-colliding placeholder (`0xFEFF:0xFCFD`). An unknown preset fails the build. **The vendor-mimicking presets are for local interop only — never distribute hardware carrying them.** |
 | `USB_VID` / `USB_PID` | from preset | `0xHHHH` | Raw override, applied on top of the preset (you can override either half alone). |
+| `USB_MANUFACTURER` / `USB_PRODUCT` | from preset | string | Raw override of the USB descriptor strings. The default is `RS-Key` / `RS-Key Security Key`; the Yubico VID instead bakes `Yubico` / `YubiKey RSK OTP+FIDO+CCID`. The project's own tools (`rsk`, `rsk-tui`) match the reader by the `RS-Key` (or `RSK`) token in the product string. |
 | `FW_VERSION` | `5.7.4` | `X.Y.Z` or `X.Y` | The firmware version reported everywhere a tool looks: management DeviceInfo (`ykman info`), FIDO getInfo, CTAPHID INIT, OATH/OTP/PIV version fields. Yubico tools gate features on it; 5.7.4 mimics a current YubiKey 5. Does **not** change the OpenPGP card version (3.4) or the USB `bcdDevice` (an internal build counter). |
 | `XOSC_DELAY_MULT` | `128` | `1..=1024` | Crystal-oscillator startup-delay multiplier ("delayed boot"). A longer settle wait is intended to harden the early-boot clock-switch window against glitch/fault injection. 128 is the embassy default. |
 | `FLASH_SIZE` | `4M` | bytes, `0xHEX`, or `<n>K`/`<n>M` | External QSPI flash size. build.rs regenerates `memory.x` from it — the KV store stays a fixed 1.5 MB at the top, the code region is the rest. `4M` reproduces the checked-in layout byte-for-byte. Use this for boards with a different flash chip (e.g. `8M`); must be ≥ ~2 MB and ≤ 16 MB. |
@@ -45,16 +46,23 @@ flowchart TD
 Verify what got baked without flashing:
 
 ```sh
-rg PK_USB_VID  target/thumbv8m.main-none-eabihf/release/build/firmware-*/output   # decimal: 4176 = 0x1050
+rg PK_USB_VID  target/thumbv8m.main-none-eabihf/release/build/firmware-*/output   # decimal: 4617 = 0x1209
 rg PK_FW_VERSION target/thumbv8m.main-none-eabihf/release/build/rsk-sdk-*/output
 rg PK_XOSC_DELAY_MULT target/thumbv8m.main-none-eabihf/release/build/firmware-*/output
 ```
 
+The `firmware-*` glob matches one build dir per feature combination you have
+built, so a stale entry can show an old value. Read the freshest one (or
+`cargo clean -p firmware` first) if the output looks doubled.
+
 ## Examples
 
 ```sh
-# default: touch build, YubiKey-5 identity, fw 5.7.4
+# default: touch build, RS-Key identity (0x1209:0x0001), fw 5.7.4
 cargo build --release -p firmware
+
+# opt-in Yubico interop flavor (so ykman / Yubico Authenticator see the device)
+env VIDPID=Yubikey5 cargo build --release -p firmware
 
 # no-touch test build (for the automated suites)
 cargo build --release -p firmware --no-default-features
@@ -96,7 +104,7 @@ check the seal with `picotool`. The flavors mirror the
 
 | Attribute | Image |
 |---|---|
-| `.#firmware` (default) | touch build, YubiKey-5 identity, fw 5.7.4 |
+| `.#firmware` (default) | touch build, RS-Key identity (`0x1209:0x0001`), fw 5.7.4 |
 | `.#firmware-no-touch` | `--no-default-features` (the test build) |
 | `.#firmware-fips` | `--features fips-profile` |
 | `.#firmware-pqc` | `--features advertise-pqc` |
@@ -162,11 +170,14 @@ flowchart TD
 
 ## Notes
 
-- The PC/SC **reader name** comes from the USB strings
-  (`Yubico YubiKey RSK OTP+FIDO+CCID`). `ykman` derives the device's PID from
-  that name — it needs the `Yubico YubiKey` words and the `OTP`/`FIDO`/`CCID`
-  tokens. If you change the product string, YubiKey tools stop recognizing the
-  CCID half; the project's own tools match the `RSK` token.
+- The PC/SC **reader name** comes from the USB strings. The default build reads
+  `RS-Key RS-Key Security Key …`, and the project's own tools (`rsk`, `rsk-tui`)
+  match the `RS-Key` token. `ykman` and Yubico Authenticator derive the device's
+  PID *purely from that name* — they need the `Yubico YubiKey` words and the
+  `OTP`/`FIDO`/`CCID` tokens, which only the opt-in `VIDPID=Yubikey5` flavor
+  supplies (`Yubico YubiKey RSK OTP+FIDO+CCID`); on the default build those tools
+  do not see the device. `gpg`, `ssh -sk`, browsers, libfido2 and OpenSC are
+  identity-independent and work on either build.
 - `bcdDevice` (USB device release) is an internal build counter, not the
   firmware version.
 - The two UF2 flavors on a release build of this repo:

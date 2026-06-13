@@ -100,13 +100,20 @@ covers the security boundary, this page covers feature and hardware gaps.
 
 ## Protocol / compatibility
 
-- **The default USB identity mimics a YubiKey** (`0x1050:0x0407`,
-  reader name `Yubico YubiKey RSK …`, reported firmware 5.7.4). This is what
-  makes `ykman`, Yubico Authenticator and stock udev rules work, and it is
-  strictly a local convenience: distributing hardware with Yubico's
-  identifiers is not OK. Build presets exist for other identities
-  ([build.md](build.md)), but third-party vendor tools then stop working —
-  they gate on their own VID/PID.
+- **The default USB identity is RS-Key's own** (`0x1209:0x0001` on the
+  pid.codes FOSS VID, manufacturer `RS-Key`, product `RS-Key Security Key`,
+  reported firmware 5.7.4) — *not* a YubiKey masquerade. We no longer ship
+  Yubico's identifiers by default. A YubiKey identity (`0x1050:0x0407`,
+  reader name `Yubico YubiKey …`) exists only as the opt-in `VIDPID=Yubikey5`
+  build flavor ([build.md](build.md)), built for local interop testing and
+  never distributed — distributing hardware with Yubico's identifiers is not
+  OK. The trade-off: `ykman`, Yubico Authenticator and the stock Yubico udev
+  rules gate on the `Yubico YubiKey` reader name / VID `0x1050`, so on the
+  default RS-Key build they do not see the device — use them against the
+  `VIDPID=Yubikey5` flavor, or add a udev rule matching VID `0x1209`.
+  FIDO2/WebAuthn, `ssh -sk`, `gpg`/OpenPGP, OpenSC/PKCS#11 and the project's
+  own `rsk`/`rsk-tui` tools are identity-independent and work on the default
+  build.
 - **OpenPGP secure messaging** is not implemented (rarely used by clients;
   PINs gate everything in practice).
 - **One physical button.** Touch = the BOOTSEL button; there is no

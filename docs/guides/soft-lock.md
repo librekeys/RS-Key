@@ -143,8 +143,9 @@ ordering matters:
 ## Lost the lock key?
 
 Unrecoverable by design. The way forward is a FIDO factory reset, which
-deletes the locked blob and generates a fresh identity (`ykman fido reset`,
-or any WebAuthn "reset security key" UI — see [fido2.md](fido2.md)). Your
+deletes the locked blob and generates a fresh identity (`ykman fido reset`
+— needs the opt-in `VIDPID=Yubikey5` build — or any WebAuthn "reset security
+key" UI on the default build — see [fido2.md](fido2.md)). Your
 [seed backup](seed-backup.md), if you made one *before* locking, still
 restores the old identity afterwards; without it the old credentials
 (`ssh ed25519-sk` keys, U2F registrations) are gone.
@@ -163,5 +164,3 @@ restores the old identity afterwards; without it the old credentials
 - The lock protects the FIDO seed only. OpenPGP, PIV, and OATH keys are sealed
   to the chip independently and are *not* gated by it. To gate those, rely on
   their own PINs and on the OTP/secure-boot tier.
-</content>
-</invoke>

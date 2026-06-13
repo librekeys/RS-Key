@@ -44,16 +44,18 @@ your board is hard to reach) add `--no-default-features`. All build knobs:
    RESET). A mass-storage drive named `RP2350` appears.
 2. Copy the image: `cp firmware.uf2 /Volumes/RP2350/` (macOS) or to the
    mounted drive on Linux.
-3. The board reboots itself and enumerates as
-   `Yubico YubiKey RSK OTP+FIDO+CCID`. (The product string contains "Yubico
-   YubiKey" because the default build uses a YubiKey USB identity so stock
-   tooling works — a local convenience only, see [build.md](build.md).)
+3. The board reboots itself and enumerates as `RS-Key Security Key`. (The
+   default build uses the project's own USB identity, VID:PID
+   `0x1209:0x0001` from pid.codes; the PC/SC reader name contains "RS-Key".
+   For a build that presents the YubiKey USB identity so `ykman`/Yubico
+   Authenticator auto-recognize it, build the opt-in `VIDPID=Yubikey5`
+   flavor — see [build.md](build.md).)
 
 Check it:
 
 ```sh
 rsk status        # FIDO getInfo + secure-boot + backup state, over USB
-ykman info        # if you have ykman: YubiKey 5A, firmware 5.7.4, 6 apps
+ykman info        # needs the opt-in VIDPID=Yubikey5 build: YubiKey 5A, firmware 5.7.4, 6 apps
 ```
 
 On Linux, the CCID half (OpenPGP/PIV/OATH) needs `pcscd` + a polkit rule

@@ -115,7 +115,7 @@ def get_pin_token(dev, cid, pin):
 def warm_reboot():
     from smartcard.System import readers
     rs = readers()
-    target = next((r for r in rs if "RSK" in str(r)), None)
+    target = next((r for r in rs if ("RSK" in str(r) or "RS-Key" in str(r))), None)
     if target is None:
         sys.exit("FAIL: no RSK CCID reader for the reboot step")
     conn = target.createConnection()

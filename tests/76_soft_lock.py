@@ -60,7 +60,7 @@ def open_fido(timeout=25.0):
 
 def warm_reboot():
     from smartcard.System import readers
-    target = next((r for r in readers() if "RSK" in str(r)), None)
+    target = next((r for r in readers() if ("RSK" in str(r) or "RS-Key" in str(r))), None)
     if target is None:
         sys.exit("FAIL: no RSK CCID reader for the reboot step")
     conn = target.createConnection()

@@ -44,15 +44,20 @@ flowchart TD
 ## What it is, plainly
 
 - It aims to behave like a USB security key and to work with the host software
-  people already use — `ssh`, `gpg`, browsers, `ykman`, libfido2. What has
+  people already use — `ssh`, `gpg`, browsers, libfido2, and `ykman` (which needs
+  the opt-in `VIDPID=Yubikey5` build — see below). What has
   actually been checked on hardware is recorded in the
   [interop matrix](interop.md), with dates.
 - It is **not** a certified hardware security key, and not a drop-in replacement
   for an audited commercial key in production. There is no secure element.
-- The default USB identity matches a YubiKey's (VID `0x1050` / PID `0x0407`) so
-  that stock tooling works without custom rules. That is a local-interoperability
-  convenience only — see [limitations](limitations.md). RS-Key is not affiliated
-  with or endorsed by Yubico, Nitrokey, or Raspberry Pi.
+- The default USB identity is RS-Key's own (VID `0x1209` / PID `0x0001`, from
+  [pid.codes](https://pid.codes), the open-source USB VID), presenting as
+  "RS-Key Security Key". An opt-in `VIDPID=Yubikey5` build instead borrows a
+  YubiKey's identity (VID `0x1050` / PID `0x0407`) so that `ykman` and Yubico
+  Authenticator — which key off the "Yubico YubiKey" reader name — work without
+  custom rules; that flavor is for interop only and is never distributed. See
+  [limitations](limitations.md). RS-Key is not affiliated with or endorsed by
+  Yubico, Nitrokey, or Raspberry Pi.
 
 ## License
 

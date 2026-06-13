@@ -17,15 +17,27 @@ def _require():
         sys.exit("missing dependency: pyscard (run `rsk` from `nix develop`)")
 
 
-def find_reader(substr="RSK"):
+# Reader-name tokens that mark our device: the default build's product string
+# carries "RS-Key"; the opt-in Yubico interop flavor carries "RSK". Neither
+# appears in a genuine YubiKey's reader name, so we never grab the wrong device.
+RSK_READER_TOKENS = ("RS-Key", "RSK")
+
+
+def _is_rsk(name):
+    return any(tok in name for tok in RSK_READER_TOKENS)
+
+
+def find_reader(substr=None):
     _require()
     rs = readers()
     if not rs:
         sys.exit("no PC/SC readers — is the device flashed and the CCID driver bound?")
-    return next((r for r in rs if substr in str(r)), rs[0])
+    if substr is not None:
+        return next((r for r in rs if substr in str(r)), rs[0])
+    return next((r for r in rs if _is_rsk(str(r))), rs[0])
 
 
-def connect(substr="RSK"):
+def connect(substr=None):
     conn = find_reader(substr).createConnection()
     conn.connect()
     return conn

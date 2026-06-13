@@ -516,7 +516,12 @@ fn read_ccid(snap: &mut DeviceSnapshot) {
     snap.transport.pcsc = Link::Present;
     let target = readers
         .iter()
-        .find(|r| r.to_string_lossy().contains("RSK"))
+        .find(|r| {
+            // Default build's product carries "RS-Key"; the opt-in Yubico interop
+            // flavor carries "RSK". Neither is in a genuine YubiKey's reader name.
+            let n = r.to_string_lossy();
+            n.contains("RS-Key") || n.contains("RSK")
+        })
         .copied()
         .unwrap_or(readers[0]);
     let card = match ctx.connect(target, ShareMode::Shared, Protocols::ANY) {
@@ -603,7 +608,12 @@ impl Ccid {
         }
         let target = readers
             .iter()
-            .find(|r| r.to_string_lossy().contains("RSK"))
+            .find(|r| {
+                // Default build's product carries "RS-Key"; the opt-in Yubico interop
+                // flavor carries "RSK". Neither is in a genuine YubiKey's reader name.
+                let n = r.to_string_lossy();
+                n.contains("RS-Key") || n.contains("RSK")
+            })
             .copied()
             .unwrap_or(readers[0]);
         let card = ctx
@@ -1093,7 +1103,7 @@ impl DeviceProvider for MockProvider {
                 firmware: Some("5.7.4".into()),
                 bcd_device: Some(0x0759),
                 aaguid: Some("9c5e0fd2c2c34c2fa1d6e3b7a0c41122".into()),
-                product: Some("Yubico YubiKey RSK OTP+FIDO+CCID (demo)".into()),
+                product: Some("RS-Key Security Key (demo)".into()),
             },
             fido: FidoState {
                 present: true,

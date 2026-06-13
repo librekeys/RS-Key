@@ -296,7 +296,7 @@ def main():
     rlist = readers()
     conn = None
     for r in rlist:
-        if "RSK" in str(r) or "Yubico" in str(r) or "PIV" in str(r):
+        if ("RSK" in str(r) or "RS-Key" in str(r)) or "Yubico" in str(r) or "PIV" in str(r):
             try:
                 c = r.createConnection()
                 c.connect()

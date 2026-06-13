@@ -3,13 +3,18 @@
 A PIV smart-card (NIST SP 800-73-4) over CCID: X.509 client certificates,
 S/MIME, PIV-aware OS login, SSH and `age` through PKCS#11. Driven with
 `ykman piv` or `yubico-piv-tool`; the applet also speaks the Yubico extensions
-(metadata, serial, attestation, move/delete, set-retries) those tools use, and
-reports itself as a YubiKey-class PIV application — a local interop convenience,
-not a Yubico affiliation ([build.md](../build.md)).
+(metadata, serial, attestation, move/delete, set-retries) those tools use. Note
+that `ykman piv` and `yubico-piv-tool` gate on the "Yubico YubiKey" reader name,
+which the default RS-Key build (VID:PID `0x1209:0x0001`) does not present — they
+need the opt-in `VIDPID=Yubikey5` interop build ([build.md](../build.md)). The
+PKCS#11 / OpenSC and OS-native (macOS CryptoTokenKit, Windows) routes below
+identify the card by its applet, not the reader name, so they work on the default
+build.
 
 Prereqs: on Linux, `pcscd` plus the polkit rule from [linux.md](../linux.md);
 if you also use GnuPG, the `disable-ccid` line so `scdaemon` and `pcscd` stop
-fighting over the reader. Check the card is visible:
+fighting over the reader. Check the card is visible (the `ykman` commands here
+assume the opt-in `VIDPID=Yubikey5` build):
 
 ```sh
 ykman piv info            # PIV version 5.7.4, slot + PIN/PUK/mgmt-key state
@@ -191,7 +196,9 @@ The card shows up as a standard PIV token; nothing here is RS-Key-specific.
   X.509 chain.
 
 - **`age` encryption**: `age-plugin-yubikey` drives PIV slots directly for
-  identity files; or use any PKCS#11-aware `age` build against `opensc-pkcs11.so`.
+  identity files but, like `ykman`, keys off the "Yubico YubiKey" reader name, so
+  it wants the opt-in `VIDPID=Yubikey5` build; on the default RS-Key build use any
+  PKCS#11-aware `age` build against `opensc-pkcs11.so`.
 
 - **ECDH / key agreement** (`9d` and retired slots, P-256/P-384):
   `ykman piv ... ` exposes it; at the wire level it is GENERAL AUTHENTICATE with

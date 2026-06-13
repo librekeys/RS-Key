@@ -35,7 +35,7 @@ INS_REBOOT = 0x1F
 
 def rsk_reader():
     for r in readers():
-        if "RSK" in str(r):
+        if ("RSK" in str(r) or "RS-Key" in str(r)):
             return r
     return None
 

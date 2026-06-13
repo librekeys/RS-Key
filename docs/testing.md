@@ -217,8 +217,11 @@ Protocol conformance is necessary but not sufficient: a response can be
 spec-arguable yet still trip a strict third-party parser. The layer above
 drives the *real* consumer software — `gpg`, `ssh`, libfido2, `ykman`,
 OpenSC, browsers — and records whether the device works end to end. The
-sweep `tests/interop/run.py` automates the read-only CLI cells; the full
-matrix (including the GUI/ceremony cells) lives in
+`ykman` and Yubico Authenticator cells gate on the "Yubico YubiKey" reader
+name, so they run against the opt-in `VIDPID=Yubikey5` interop flavor (never
+distributed); the default RS-Key build (0x1209:0x0001) does not expose itself
+to them. The sweep `tests/interop/run.py` automates the read-only CLI cells;
+the full matrix (including the GUI/ceremony cells) lives in
 [interop.md](interop.md). It is how the `ykman openpgp info` GET DATA `6E`
 wrapper bug was caught — every protocol test passed, only the real ykman
 parser rejected the reply.

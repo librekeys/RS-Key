@@ -2,7 +2,7 @@
 // Copyright (C) 2026 RS-Key contributors
 
 //! Build script: generates `memory.x` from the flash size, resolves the
-//! compile-time USB VID/PID (see [`resolve_vidpid`]), the XOSC startup-delay
+//! compile-time USB identity (see [`resolve_identity`]), the XOSC startup-delay
 //! multiplier, and the WS2812 LED pin, and bakes them in as `PK_*` env vars /
 //! `cfg`s that `main.rs` reads with `env!` / `#[cfg]`.
 use std::env;
@@ -41,12 +41,16 @@ fn main() {
     println!("cargo:rustc-env=PK_FLASH_SIZE={flash_size}");
     println!("cargo:rerun-if-env-changed=FLASH_SIZE");
 
-    let (vid, pid) = resolve_vidpid();
+    let (vid, pid, manufacturer, product) = resolve_identity();
     println!("cargo:rustc-env=PK_USB_VID={vid}");
     println!("cargo:rustc-env=PK_USB_PID={pid}");
+    println!("cargo:rustc-env=PK_USB_MANUFACTURER={manufacturer}");
+    println!("cargo:rustc-env=PK_USB_PRODUCT={product}");
     println!("cargo:rerun-if-env-changed=VIDPID");
     println!("cargo:rerun-if-env-changed=USB_VID");
     println!("cargo:rerun-if-env-changed=USB_PID");
+    println!("cargo:rerun-if-env-changed=USB_MANUFACTURER");
+    println!("cargo:rerun-if-env-changed=USB_PRODUCT");
 
     println!(
         "cargo:rustc-env=PK_XOSC_DELAY_MULT={}",
@@ -192,15 +196,27 @@ fn resolve_xosc_delay_mult() -> u32 {
     v
 }
 
-/// Resolve the (VID, PID) pair: `VIDPID=<preset>` picks a named pair (default
-/// `Yubikey5`, 0x1050:0x0407), then `USB_VID` / `USB_PID` (`0xHHHH` or decimal)
-/// override either half. 0x1050 is Yubico's VID — a local-interop masquerade for
-/// host software that allowlists Yubico, not for distribution; `VIDPID=Dev`
-/// selects this project's own non-colliding ids.
-fn resolve_vidpid() -> (u16, u16) {
-    let preset = env::var("VIDPID").unwrap_or_else(|_| "Yubikey5".into());
+/// Resolve the full USB identity `(VID, PID, manufacturer, product)`.
+///
+/// `VIDPID=<preset>` picks a named VID/PID pair; the default `RSKey` is this
+/// project's own pid.codes identity (`0x1209:0x0001`). `USB_VID` / `USB_PID`
+/// (`0xHHHH` or decimal) override either half, and `USB_MANUFACTURER` /
+/// `USB_PRODUCT` override the descriptor strings.
+///
+/// The descriptor strings follow the resolved VID: the default build presents
+/// this project's own identity (manufacturer `RS-Key`, product `RS-Key Security
+/// Key`) and is NOT a masquerade. The Yubico VID (`0x1050`) instead swaps in the
+/// `Yubico` / `YubiKey …` strings, because `ykman` / Yubico Authenticator derive
+/// the device's PID *purely from the PC/SC reader name* (it must contain "Yubico
+/// YubiKey"). That is an opt-in local-interop flavor — built by the interop suite
+/// / CI matrix only — never for distribution.
+fn resolve_identity() -> (u16, u16, String, String) {
+    let preset = env::var("VIDPID").unwrap_or_else(|_| "RSKey".into());
     let (mut vid, mut pid) = match preset.as_str() {
-        // Named vendor presets.
+        // This project's own pid.codes identity — the default.
+        "RSKey" => (0x1209, 0x0001),
+        // Vendor-mimicking interop presets (opt-in; local interop only, never
+        // distributed). Only the Yubico VID also swaps the descriptor strings.
         "NitroHSM" => (0x20A0, 0x4230),
         "NitroFIDO2" => (0x20A0, 0x42B1),
         "NitroStart" => (0x20A0, 0x4211),
@@ -211,13 +227,13 @@ fn resolve_vidpid() -> (u16, u16) {
         "YubiHSM" => (0x1050, 0x0030),
         "Gnuk" => (0x234B, 0x0000),
         "GnuPG" => (0x1209, 0x2440),
-        // Raspberry Pi VID fallback and this project's own dev ids.
+        // Raspberry Pi VID fallback and a non-colliding dev placeholder.
         "Pico" => (0x2E8A, 0x10FD),
         "Dev" => (0xFEFF, 0xFCFD),
         other => panic!(
-            "unknown VIDPID preset {other:?}; known: NitroHSM, NitroFIDO2, NitroStart, \
-             NitroPro, Nitro3, Yubikey5, YubikeyNeo, YubiHSM, Gnuk, GnuPG, Pico, Dev \
-             (or set USB_VID / USB_PID directly)"
+            "unknown VIDPID preset {other:?}; known: RSKey, NitroHSM, NitroFIDO2, \
+             NitroStart, NitroPro, Nitro3, Yubikey5, YubikeyNeo, YubiHSM, Gnuk, GnuPG, \
+             Pico, Dev (or set USB_VID / USB_PID directly)"
         ),
     };
     if let Ok(v) = env::var("USB_VID") {
@@ -226,7 +242,25 @@ fn resolve_vidpid() -> (u16, u16) {
     if let Ok(p) = env::var("USB_PID") {
         pid = parse_u16(&p, "USB_PID");
     }
-    (vid, pid)
+
+    // Descriptor strings track the resolved VID: this project's own identity by
+    // default; the Yubico VID gets the masquerade strings so the PC/SC reader
+    // name carries "Yubico YubiKey" for ykman / Yubico Authenticator.
+    let (mut manufacturer, mut product) = if vid == 0x1050 {
+        (
+            "Yubico".to_string(),
+            "YubiKey RSK OTP+FIDO+CCID".to_string(),
+        )
+    } else {
+        ("RS-Key".to_string(), "RS-Key Security Key".to_string())
+    };
+    if let Ok(m) = env::var("USB_MANUFACTURER") {
+        manufacturer = m;
+    }
+    if let Ok(p) = env::var("USB_PRODUCT") {
+        product = p;
+    }
+    (vid, pid, manufacturer, product)
 }
 
 /// Parse a `0xHHHH` (or decimal) 16-bit value from an env override.

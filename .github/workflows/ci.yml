@@ -10,8 +10,9 @@
 #             firmware-<flavor>.uf2 artifact.
 #   knobs   — build smokes for the compile-time env knobs (docs/build.md):
 #             all VIDPID presets, FW_VERSION, XOSC_DELAY_MULT, FAKE_* test
-#             keys. Build-only; no artifacts (masquerade ids are for local
-#             interop, not for distribution).
+#             keys, and a check that the default build bakes this project's own
+#             RS-Key identity while the opt-in Yubico flavor bakes Yubico's
+#             (the vendor-mimicking ids are local interop only, never shipped).
 
 name: ci
 
@@ -34,7 +35,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # gitleaks scans the commit history, not just HEAD
           fetch-depth: 0
 
       - uses: DeterminateSystems/nix-installer-action@v16
@@ -63,8 +63,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # All 2^3 combinations of {up-button, advertise-pqc, fips-profile}.
-          # "no-touch" = --no-default-features (the test build: presence off).
           - name: default
             args: ""
           - name: pqc
@@ -139,15 +137,28 @@ jobs:
           key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'flake.lock') }}
           restore-keys: cargo-${{ runner.os }}-
 
-      # Sequential on purpose: after the first build only the firmware crate
-      # relinks (the env knobs feed its build script), so each preset is cheap.
       - name: every VIDPID preset builds
         run: |
-          for preset in Yubikey5 YubikeyNeo YubiHSM NitroHSM NitroFIDO2 NitroStart NitroPro Nitro3 Gnuk GnuPG Pico Dev; do
+          for preset in RSKey Yubikey5 YubikeyNeo YubiHSM NitroHSM NitroFIDO2 NitroStart NitroPro Nitro3 Gnuk GnuPG Pico Dev; do
             echo "::group::VIDPID=$preset"
             nix develop -c env VIDPID="$preset" cargo build --release -p firmware
             echo "::endgroup::"
           done
+
+      - name: default identity is RS-Key, Yubico flavor is opt-in
+        run: |
+          nix develop -c bash -euo pipefail -c '
+            o=target/thumbv8m.main-none-eabihf/release/build/firmware-*/output
+            cargo clean -p firmware
+            cargo build --release -p firmware >/dev/null
+            grep -qx "cargo:rustc-env=PK_USB_VID=4617" $o
+            grep -qx "cargo:rustc-env=PK_USB_MANUFACTURER=RS-Key" $o
+            grep -qx "cargo:rustc-env=PK_USB_PRODUCT=RS-Key Security Key" $o
+            env VIDPID=Yubikey5 cargo build --release -p firmware >/dev/null
+            grep -qx "cargo:rustc-env=PK_USB_VID=4176" $o
+            grep -qx "cargo:rustc-env=PK_USB_MANUFACTURER=Yubico" $o
+            echo "default = RS-Key identity, Yubikey5 = Yubico identity: OK"
+          '
 
       - name: raw USB_VID/USB_PID override
         run: nix develop -c env VIDPID=Dev USB_VID=0xFEFF USB_PID=0x0001 cargo build --release -p firmware
@@ -158,8 +169,6 @@ jobs:
       - name: hardened XOSC startup delay
         run: nix develop -c env XOSC_DELAY_MULT=512 cargo build --release -p firmware
 
-      # Test-only path: fake OTP keys baked into the image (loud warning,
-      # greppable key) — the zero-fuse-writes OTP migration test build.
       - name: FAKE_MKEK / FAKE_DEVK test build
         run: |
           nix develop -c env \

@@ -6,11 +6,15 @@ interface, so standard WebAuthn browsers and OS dialogs drive it without any
 extra software. What has actually been checked against real clients is in the
 [interop matrix](../interop.md).
 
-The device enumerates as "Yubico YubiKey" because the default build borrows a
-YubiKey USB identity so stock tooling (browsers, `ykman`, `python-fido2`) works
-out of the box — a local convenience, not a Yubico affiliation
-([build.md](../build.md)). The reported firmware version is `5.7.4`, which is
-what FIDO tooling reads back; it is a build constant, not the RS-Key release.
+The default build enumerates as "RS-Key" — its own USB identity
+(`0x1209:0x0001`, the pid.codes FOSS VID), not a YubiKey one
+([build.md](../build.md)). FIDO clients don't care: browsers, `python-fido2`,
+and libfido2 bind the FIDO HID usage page, not the VID/PID, so everything on this
+page works regardless of USB identity. The one exception is `ykman`, which gates
+on a "Yubico YubiKey" reader name and therefore needs the opt-in
+`VIDPID=Yubikey5` interop build ([build.md](../build.md)). The reported firmware
+version is `5.7.4`, which is what FIDO tooling reads back; it is a build constant,
+not the RS-Key release.
 
 ## Touch is always required
 
@@ -28,7 +32,7 @@ on a custom board means presence confirms instantly.
 
 ```sh
 rsk fido set-pin            # set, or change once one exists
-ykman fido access change-pin   # the same operation via ykman
+ykman fido access change-pin   # the same operation via ykman (needs the VIDPID=Yubikey5 build)
 ```
 
 The clientPIN gates credential creation once it exists, and unlocks anything a
@@ -68,8 +72,8 @@ Inspect and clean up (PIN required — credentialManagement is PIN-gated):
 
 ```sh
 rsk fido list-passkeys              # relying parties + user handles + free slots
-ykman fido credentials list        # same, via ykman
-ykman fido credentials delete <id>  # remove one (browsers expose this too)
+ykman fido credentials list        # same, via ykman (needs the VIDPID=Yubikey5 build)
+ykman fido credentials delete <id>  # remove one (same build; browsers expose this too)
 ```
 
 `rsk fido list-passkeys` prints the existing count and remaining slots, then each
@@ -146,7 +150,7 @@ to true once an org key is installed — see [attestation.md](attestation.md).
 ## Factory reset
 
 ```sh
-ykman fido reset            # or any WebAuthn "reset security key" UI
+ykman fido reset            # needs the VIDPID=Yubikey5 build; or any WebAuthn "reset security key" UI
 ```
 
 Wipes **all** FIDO state — resident passkeys, the PIN, the master seed (so all
@@ -169,7 +173,8 @@ browser, not by the firmware itself.
 - **A site demands UV but you have no PIN** — set one (`rsk fido set-pin`); UV on
   this device means the FIDO PIN.
 - **"no space" / store-full at registration** — 256 resident passkeys is the cap
-  (`KEY_STORE_FULL 0x28`); delete some with `ykman fido credentials delete`.
+  (`KEY_STORE_FULL 0x28`); delete some with `ykman fido credentials delete` (needs
+  the `VIDPID=Yubikey5` build) or your browser/OS passkey manager.
 - **`rsk fido …` says "missing dependency: python-fido2"** — run `rsk` from
   inside `nix develop`; the management commands need the `python-fido2` library.
 - **A "no-touch" SSH key still asks for a touch** — by design; the firmware

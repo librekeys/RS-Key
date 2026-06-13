@@ -4,6 +4,13 @@ The YubiKey "OTP" feature: four slots, each holding one credential, output by a
 button press or read over USB. Program slots 1–2 with stock `ykman otp`; slots
 3–4 are two extra slots reached over the same protocol with a slot offset.
 
+> **`ykman otp` needs the opt-in Yubico flavor.** `ykman` gates on the "Yubico
+> YubiKey" reader name, which only the opt-in `VIDPID=Yubikey5` build presents;
+> the default `RSKey` build (VID:PID `0x1209:0x0001`, reader "RS-Key") is invisible
+> to it. The HID-keyboard *typing* of a slot's output is identity-independent and
+> works on either build — it's only programming/reading slots over `ykman` that
+> needs the Yubico flavor.
+
 > Not the RP2350 fuses. This page is the Yubico one-time-password feature. The
 > chip's One-Time-Programmable fuses (secure-boot key, master sealing key) are a
 > different thing with the same three letters — see

@@ -124,7 +124,7 @@ def main():
     print("readers:", [str(r) for r in rs])
     if not rs:
         fail("no PC/SC readers — is the device flashed and the CCID driver bound?")
-    target = next((r for r in rs if "RSK" in str(r)), rs[0])
+    target = next((r for r in rs if ("RSK" in str(r) or "RS-Key" in str(r))), rs[0])
     print("using:", target)
     conn = target.createConnection()
     conn.connect()

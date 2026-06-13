@@ -101,11 +101,15 @@ not buy before provisioning.
 ## Device identity
 
 USB VID/PID, product strings and the reported firmware version are
-compile-time knobs ([build.md](build.md)) with a YubiKey-5 default so the
-Yubico ecosystem tools work. A flash-resident *phy* record can override
-VID/PID and the product string at boot (the store mounts before the USB
-builder runs for exactly this reason). FIDO tools find the device by HID
-usage page, CCID tools by the reader name.
+compile-time knobs ([build.md](build.md)). The default is RS-Key's own
+identity — VID:PID `0x1209:0x0001` (pid.codes), manufacturer "RS-Key",
+product "RS-Key Security Key" (the `RSKey` preset). An opt-in `VIDPID=Yubikey5`
+preset builds the Yubico interop flavor (`0x1050:0x0407`, reader name "Yubico
+YubiKey") for the tools that auto-recognize the device purely by that reader
+name. A flash-resident *phy* record can override VID/PID and the product
+string at boot (the store mounts before the USB builder runs for exactly this
+reason). FIDO tools find the device by HID usage page, CCID tools by the
+reader name.
 
 ## User presence
 

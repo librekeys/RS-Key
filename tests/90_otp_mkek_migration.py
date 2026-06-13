@@ -96,7 +96,7 @@ def fail(msg):
 
 
 def connect():
-    rs = [r for r in readers() if "RSK" in str(r)]
+    rs = [r for r in readers() if ("RSK" in str(r) or "RS-Key" in str(r))]
     if not rs:
         fail("no RSK reader (device plugged in? pcscd up? scdaemon holding it?)")
     conn = rs[0].createConnection()

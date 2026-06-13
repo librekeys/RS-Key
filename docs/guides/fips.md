@@ -89,6 +89,11 @@ ykman piv keys generate 9a pub.pem            # re-issue any RSA-1024 slots as
 #    ES256 / EdDSA passkey; the old credential keeps working until you do.
 ```
 
+> **`ykman` needs the opt-in `VIDPID=Yubikey5` build.** It gates on the "Yubico
+> YubiKey" reader name, which the default RS-Key build (`0x1209:0x0001`) does not
+> present. Build that flavor for the `ykman` commands here and under *Verifying*
+> below, or drive the device with `rsk` / `rsk-tui` on the default build.
+
 There is no "convert" command — you generate a new approved key and retire
 the old one through normal applet flows. The old 3DES/RSA-1024/secp256k1
 material lingers only as long as you let it.

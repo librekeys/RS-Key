@@ -1,14 +1,16 @@
 # Linux host setup
 
-The board enumerates as a composite **FIDO HID + CCID** device under the
-default YubiKey USB identity `0x1050:0x0407` (the default build; other presets:
+The board enumerates as a composite **FIDO HID + CCID** device. By default it
+uses the project's own RS-Key USB identity `0x1209:0x0001` (pid.codes), with the
+PC/SC reader name containing `RS-Key`. The opt-in `VIDPID=Yubikey5` interop build
+instead presents the YubiKey identity `0x1050:0x0407` (other presets:
 [build.md](build.md)). The two transports have different host requirements on
 Linux:
 
 | Transport | Used by | Out of the box? |
 |---|---|---|
 | **FIDO HID** (`0xF1D0`) | WebAuthn, `ssh ed25519-sk`, `fido2-token`, python-fido2 | yes, once the yubico udev rules grant your user access to the hidraw node |
-| **CCID** (PC/SC) | OpenPGP, PIV, OATH, Yubico-OTP, `ykman`, `gpg --card-status` | needs `pcscd` running **and** a polkit rule to use it as a non-root / SSH-session user |
+| **CCID** (PC/SC) | OpenPGP, PIV, OATH, Yubico-OTP, `gpg --card-status` (`ykman` only on the opt-in `VIDPID=Yubikey5` build) | needs `pcscd` running **and** a polkit rule to use it as a non-root / SSH-session user |
 
 ```mermaid
 flowchart TD
@@ -23,9 +25,11 @@ use GnuPG, **`disable-ccid`** in `scdaemon.conf` so `gpg`'s `scdaemon` goes
 through `pcscd` instead of grabbing the raw CCID interface and locking out
 `ykman`/`pcsc-tools`.
 
-> Verified on a **NixOS 25.11** host (kernel 6.18.x): FIDO `getInfo` and
-> `ykman info` work as a plain user over SSH once the polkit rule below is in
-> place; `gpg --card-status` works with `disable-ccid`.
+> Verified on a **NixOS 25.11** host (kernel 6.18.x): FIDO `getInfo` works as a
+> plain user over SSH once the udev rule below is in place, and `gpg
+> --card-status` works with `disable-ccid`. `ykman info` works the same way on
+> the opt-in `VIDPID=Yubikey5` build (it gates on the `Yubico YubiKey` reader
+> name, which the default RS-Key build does not present).
 
 Replace `youruser` with your login name throughout.
 
@@ -39,13 +43,19 @@ Add to your `configuration.nix`:
   # PC/SC daemon for the CCID applets (OpenPGP / PIV / OATH / OTP).
   services.pcscd.enable = true;
 
-  # udev rules that grant access to the FIDO hidraw node and the YubiKey
-  # interfaces. The stock yubico rules already match our 0x1050:0x0407
-  # identity, so no custom rule is needed.
+  # udev rules that grant access to the FIDO hidraw node. The stock yubico
+  # rules match VID 0x1050 only, so the default RS-Key identity (0x1209) needs
+  # its own rule; build VIDPID=Yubikey5 instead if you want to reuse the stock
+  # yubico rules unchanged.
   services.udev.packages = [
     pkgs.yubikey-personalization
     pkgs.libfido2
   ];
+  services.udev.extraRules = ''
+    # RS-Key own identity (pid.codes 0x1209:0x0001) — FIDO HID + CCID access.
+    SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="0001", TAG+="uaccess"
+    SUBSYSTEM=="usb", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="0001", TAG+="uaccess"
+  '';
 
   # Let a non-root user (e.g. over SSH) talk to pcscd. Without this, CCID works
   # only as root and `ykman`/`gpg --card-status` fail from an SSH session.
@@ -80,11 +90,21 @@ Add to your `configuration.nix`:
 
 2. **Enable pcscd:** `sudo systemctl enable --now pcscd.socket`
 
-3. **udev rules** for FIDO + YubiKey access usually ship with `libfido2` /
-   `yubikey-personalization` / `libu2f-host`. If your user still can't open the
-   device, confirm the rules are installed under `/usr/lib/udev/rules.d/`
-   (e.g. `70-u2f.rules`) and that you're in the right group (`plugdev` on
-   Debian/Ubuntu), then `sudo udevadm control --reload && sudo udevadm trigger`.
+3. **udev rules** — the stock yubico rules that ship with `libfido2` /
+   `yubikey-personalization` / `libu2f-host` match VID `0x1050` only, so they do
+   **not** cover the default RS-Key identity (`0x1209`). Add your own rule —
+   create `/etc/udev/rules.d/70-rsk.rules`:
+
+   ```udev
+   # RS-Key own identity (pid.codes 0x1209:0x0001) — FIDO HID + CCID access.
+   SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="0001", TAG+="uaccess", GROUP="plugdev", MODE="0660"
+   SUBSYSTEM=="usb", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="0001", TAG+="uaccess", GROUP="plugdev", MODE="0660"
+   ```
+
+   Then `sudo udevadm control --reload && sudo udevadm trigger` and re-plug.
+   (Alternatively, build `VIDPID=Yubikey5` to reuse the stock yubico rules
+   unchanged.) If your user still can't open the device, confirm you're in the
+   right group (`plugdev` on Debian/Ubuntu).
 
 4. **polkit rule** for non-root pcscd access — create
    `/etc/polkit-1/rules.d/41-pcsc-rsk.rules`:
@@ -114,7 +134,8 @@ pcsc-shared
 ```
 
 Then reload it: `gpgconf --kill scdaemon`. After this, `gpg --card-status` and
-`ykman`/`pcsc_scan` coexist (they share the one reader through `pcscd`).
+`pcsc_scan` (and `ykman`, on the opt-in `VIDPID=Yubikey5` build) coexist (they
+share the one reader through `pcscd`).
 
 ## FIDO / SSH (`ed25519-sk`)
 
@@ -133,27 +154,30 @@ The key file is a handle, copyable between machines. Use lowercase `-i` (not
 
 ## Going further (NixOS quality-of-life)
 
-Because the device presents as a YubiKey (`0x1050:0x0407`), the usual
-YubiKey-on-NixOS recipes apply unchanged — PAM U2F for `sudo`/login, LUKS
-FIDO2 unlock, gpg-agent SSH. A good walkthrough:
+The FIDO-based YubiKey-on-NixOS recipes — PAM U2F for `sudo`/login, LUKS
+FIDO2 unlock, gpg-agent SSH — bind the FIDO HID usage page (or the OpenPGP
+card via PC/SC), not the VID/PID, so they apply to the default RS-Key build
+unchanged. (Recipes that gate on `ykman` or the `Yubico YubiKey` reader name
+need the opt-in `VIDPID=Yubikey5` build.) A good walkthrough:
 [Improving QoL on NixOS with a YubiKey](https://unmovedcentre.com/posts/improving-qol-on-nixos-with-yubikey/) —
 substitute this device wherever it says YubiKey.
 
 ## Troubleshooting
 
-- **`ykman`/`pcsc_scan` says no reader, or "Failed to connect":** `scdaemon`
-  (from a prior `gpg`) is holding the reader exclusively. `gpgconf --kill
-  scdaemon`, then retry. The `disable-ccid` + `pcsc-shared` config above
-  prevents the recurrence.
-- **`ykman info` connects but shows firmware `3.0.0 / U2F` only:** `ykman`
-  derives the device from the **PC/SC reader name**, which must contain
-  `YubiKey`. Our firmware names the reader `Yubico YubiKey RSK OTP+FIDO+CCID`,
-  so this works; if you changed the product string, restore a name containing
-  `Yubico`/`YubiKey` (see [build.md](build.md)).
+- **`pcsc_scan` (or `ykman`, on the `VIDPID=Yubikey5` build) says no reader, or
+  "Failed to connect":** `scdaemon` (from a prior `gpg`) is holding the reader
+  exclusively. `gpgconf --kill scdaemon`, then retry. The `disable-ccid` +
+  `pcsc-shared` config above prevents the recurrence.
+- **`ykman` does not see the device at all:** `ykman` derives the device purely
+  from the **PC/SC reader name**, which must contain `Yubico YubiKey`. The
+  default RS-Key build names the reader `RS-Key Security Key`, so `ykman` will
+  not recognize it — build the opt-in `VIDPID=Yubikey5` flavor (reader name
+  `Yubico YubiKey RSK OTP+FIDO+CCID`) to use `ykman` (see [build.md](build.md)).
 - **Everything hangs after heavy USB debugging:** the `pcscd` + `scdaemon` +
   kernel USB stack can wedge in a way that surviving `pcscd`/`scdaemon`
   restarts or a re-plug do **not** clear — a **full host reboot** does. This is
   a host-stack quirk, not a firmware issue.
 - **Verify the reader:** `pcsc_scan` (or `opensc-tool -l`) should list
-  `Yubico YubiKey RSK OTP+FIDO+CCID`; `ykman info` should report `5.7.4` with
-  all six applications enabled.
+  `RS-Key Security Key` on the default build (or `Yubico YubiKey RSK
+  OTP+FIDO+CCID` on the opt-in `VIDPID=Yubikey5` build). On that opt-in build,
+  `ykman info` should report `5.7.4` with all six applications enabled.

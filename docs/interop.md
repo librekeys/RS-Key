@@ -22,11 +22,15 @@ yet still trip a strict third-party parser. (The canonical example is the
 `ykman openpgp info` crash below: our GET DATA `6E` was readable by `gpg` but
 rejected by ykman's stricter `Tlv.unpack(0x6E, …)`.)
 
-> This is experimental firmware with no security audit, and the cells below
-> only work because the default build uses a YubiKey USB identity so stock
-> tooling recognises the device (a local convenience — see
-> [build.md](build.md)). A ✅ means the cell was observed working on the dated
-> build; it is a record, not a guarantee of future builds or other hosts.
+> This is experimental firmware with no security audit. Most cells below run on
+> the **default RS-Key build** (USB VID:PID `0x1209:0x0001`, reader name
+> "RS-Key") — `gpg`, `ssh`, browsers, OpenSC, and libfido2 bind the ATR / FIDO
+> HID usage page, not the VID/PID, so they don't care about branding. The
+> `ykman` and Yubico Authenticator cells are the exception: they derive the
+> device from the "Yubico YubiKey" reader name, so they need the opt-in
+> `VIDPID=Yubikey5` interop flavor (`0x1050:0x0407`) — see [build.md](build.md).
+> A ✅ means the cell was observed working on the dated build; it is a record,
+> not a guarantee of future builds or other hosts.
 
 The matrix is a living artifact. A cell is **evidence** only once it has been
 run on hardware and dated; everything else is `⏳ untested`. The `0758` /
@@ -96,14 +100,14 @@ accordingly:
 |---|---|---|---|---|
 | `gpg --card-status` | application-related-data read | either | `tests/interop/run.py` | ✅ `0759` |
 | `gpg --edit-card` keygen/sign/encrypt | full card lifecycle | touch (UIF) | manual | ✅ `075A` (EC+RSA `generate` land on-card after the [GET DATA short-Le fix](#get-data-short-le-chaining-fixed-on-0x075a); was ❌ on `0759`) |
-| `ykman openpgp info` | `Tlv.unpack(0x6E, …)` strict parse | either | `tests/interop/run.py` | ✅ `0759` (was ❌ on `0758`) |
+| `ykman openpgp info` | `Tlv.unpack(0x6E, …)` strict parse | either (needs `VIDPID=Yubikey5`) | `tests/interop/run.py` | ✅ `0759` (was ❌ on `0758`) |
 | openpgp-card-tests (Gnuk-derived) | spec suite | no-touch | `pytest third_party/openpgp-card-tests/…` | ⚠️ `075A` — `001_initial_check` 31/34; [3 fails, one root, not a defect](#suite-triage) |
 
 ### PIV
 
 | Consumer | What it exercises | Build | How | Status |
 |---|---|---|---|---|
-| `ykman piv info` | discovery + slot state | no-touch | `tests/interop/run.py` | ✅ `0759` |
+| `ykman piv info` | discovery + slot state | no-touch (needs `VIDPID=Yubikey5`) | `tests/interop/run.py` | ✅ `0759` |
 | OpenSC `pkcs11-tool` | PKCS#11 module load + enumerate | no-touch | `pkcs11-tool --module …/opensc-pkcs11.so -L -O` | ✅ `075A` (loads + enumerates; OpenSC auto-selects the OpenPGP app via PKCS#15 emulation — 2 slots, metadata + object store read clean; sign/cert untested on a fresh card) |
 | macOS native (`sc_auth`, Keychain) | system smartcard discovery | no-touch | `sc_auth identities`, `system_profiler SPSmartCardsDataType` | ✅ `075A` (CryptoTokenKit sees the reader + ATR, binds `pivtoken.appex`; no paired identity on a fresh card) |
 
@@ -111,9 +115,9 @@ accordingly:
 
 | Consumer | What it exercises | Build | How | Status |
 |---|---|---|---|---|
-| `ykman oath accounts list` | OATH credential listing | no-touch | `tests/interop/run.py` | ✅ `0759` |
-| Yubico Authenticator (app) | TOTP/HOTP GUI | no-touch | manual (desktop app) | ✅ `075A` — detects the key + all 6 apps; OATH add/calc/delete work; [TOTP crypto-verified](#suite-triage) (`2026-06-13`) |
-| `ykman otp info` | OTP slot state | no-touch | `tests/interop/run.py` | ✅ `0759` |
+| `ykman oath accounts list` | OATH credential listing | no-touch (needs `VIDPID=Yubikey5`) | `tests/interop/run.py` | ✅ `0759` |
+| Yubico Authenticator (app) | TOTP/HOTP GUI | no-touch (needs `VIDPID=Yubikey5`) | manual (desktop app) | ✅ `075A` — detects the key + all 6 apps; OATH add/calc/delete work; [TOTP crypto-verified](#suite-triage) (`2026-06-13`) |
+| `ykman otp info` | OTP slot state | no-touch (needs `VIDPID=Yubikey5`) | `tests/interop/run.py` | ✅ `0759` |
 | OTP keyboard (types the code) | USB-HID keyboard emulation | touch | manual (focus a text field) | ✅ `0759` (short-tap typed the static slot verbatim, `2026-06-13`) |
 
 ## Suite triage
@@ -139,7 +143,8 @@ templates (the bug-#1 ykman/real-Yubikey requirement) fail the Gnuk "unwrapped"
 asserts. Wrapping is mandatory for ykman; the two expectations are mutually
 exclusive.
 
-**Yubico Authenticator (app) — `075A`.** Detects the key + all 6 apps
+**Yubico Authenticator (app) — `075A`** (built `VIDPID=Yubikey5`; the GUI gates
+on the "Yubico YubiKey" reader name). Detects the key + all 6 apps
 (OTP/PIV/OATH/OpenPGP/U2F/FIDO2); OATH add → calculate → delete all work in-GUI.
 The displayed TOTP `111429` then `629022` cryptographically matched an
 independent software HMAC-SHA1 TOTP of the same secret/window (`2026-06-13`).
@@ -227,5 +232,8 @@ nix develop -c python tests/interop/run.py --json      # machine-readable
 
 The runner discovers the device via `fido2-token -L` (HID) and `ykman info`
 (CCID), runs each probe, and prints this matrix's automatable rows with live
-results. It never mutates state by default (read-only probes); destructive
-cells (enrol/keygen) are opt-in.
+results. The `ykman`-based probes only see the device on the opt-in
+`VIDPID=Yubikey5` build (they gate on the "Yubico YubiKey" reader name); on the
+default RS-Key build the HID and `gpg`/PC/SC probes still run. It never mutates
+state by default (read-only probes); destructive cells (enrol/keygen) are
+opt-in.

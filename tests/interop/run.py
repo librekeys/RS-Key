@@ -61,9 +61,11 @@ def discover():
     if shutil.which("fido2-token"):
         rc, out = run(["fido2-token", "-L"])
         if rc == 0 and out.strip():
-            # `<path>: vendor (0x1050) product (0x0407) ...` — the path is the
-            # first whitespace-free token (macOS `ioreg://…:`, Linux
-            # `/dev/hidraw0`); the `: ` separator leaves a trailing colon.
+            # `<path>: vendor (0xXXXX) product (0xXXXX) ...` — the default build
+            # reports the RS-Key id 0x1209:0x0001 (the opt-in Yubico flavor reports
+            # 0x1050:0x0407). The path is the first whitespace-free token (macOS
+            # `ioreg://…:`, Linux `/dev/hidraw0`); the `: ` separator leaves a
+            # trailing colon. ykman discovery below only finds the Yubico flavor.
             first = out.strip().splitlines()[0]
             env["fido_dev"] = (first.split()[0].rstrip(":") or None) if first.split() else None
             env["hid"] = env["fido_dev"] is not None

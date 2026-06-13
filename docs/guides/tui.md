@@ -204,7 +204,9 @@ to run — they are never performed from the cockpit:
   fido list-passkeys --pin …`), factory reset (`ykman fido reset`)
 - **OpenPGP / PIV / OATH / OTP**: full card data and factory resets (`gpg
   --card-status`, `ykman piv info`, `ykman oath accounts`, `rsk openpgp reset`,
-  `ykman piv reset`, …)
+  `ykman piv reset`, …). The `ykman` commands gate on the "Yubico YubiKey"
+  reader name, so they only see the device on the opt-in `VIDPID=Yubikey5`
+  build; `gpg` and `rsk` work on the default RS-Key build.
 - **Backup**: SLIP-39 (Shamir T-of-N) export/restore — `rsk backup export
   --scheme slip39` ([seed-backup.md](seed-backup.md))
 - **Maintenance** (Reboot section): seed soft-lock (`rsk lock enable | unlock |

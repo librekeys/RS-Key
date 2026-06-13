@@ -8,12 +8,13 @@ Prereqs: on Linux, `pcscd` + the `scdaemon.conf` lines from
 [linux.md](../linux.md). Check the card is visible:
 
 ```sh
-gpg --card-status            # reader: Yubico YubiKey RSK …, OpenPGP v3.4
+gpg --card-status            # reader: RS-Key Security Key …, OpenPGP v3.4
 ```
 
-The reader name contains "Yubico YubiKey" because the default build uses a
-YubiKey USB identity so stock tooling works — a local convenience, not an
-affiliation ([build.md](../build.md)).
+gpg works regardless of the reader name — scdaemon identifies the card by its
+ATR and applet SELECT, not the USB identity. The default build reports the
+reader as "RS-Key"; the opt-in `VIDPID=Yubikey5` flavor reports it as "Yubico
+YubiKey" ([build.md](../build.md)).
 
 ## PINs
 
@@ -249,7 +250,9 @@ VERIFY).
   see [Recovery and reset](#recovery-and-reset).
 - RSA `generate` seems to hang → it isn't; on-card RSA keygen takes the times
   above and gpg shows no progress bar. Wait it out, or use an EC curve.
-- `ykman openpgp info` → `ERROR: Incorrect TLV length` on firmware **before
+- `ykman openpgp info` (needs the opt-in `VIDPID=Yubikey5` build — `ykman` only
+  sees the device when the reader name contains "Yubico YubiKey") →
+  `ERROR: Incorrect TLV length` on firmware **before
   `0x0759`**: the GET DATA `6E` reply was missing its constructed-DO wrapper,
   which ykman's strict parser requires (`gpg` tolerated it). Fixed in `0x0759`;
   flash it and re-run. See [interop.md](../interop.md#known-issues).
