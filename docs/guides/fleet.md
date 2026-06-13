@@ -1,8 +1,7 @@
 # Fleet tooling
 
-Inventory, identity verification, and offboarding for a fleet of RS-Keys —
-the workflows commercial vendors put behind an "enterprise" tier, here in the
-open tree. Three commands: `rsk inventory list` (what is this key, touch-free),
+Inventory, identity verification, and offboarding for a fleet of RS-Keys.
+Three commands: `rsk inventory list` (what is this key, touch-free),
 `rsk inventory verify` (is this key the one we enrolled), `rsk offboard`
 (wipe a returned key and keep a signed receipt).
 
@@ -50,6 +49,18 @@ the ECDSA P-256 key derived from its OTP DEVK, and the host verifies the
 signature. The printed fingerprint (SHA-256 of the public key, first 16 hex
 digits) is the same one `rsk audit verify` prints — one identity anchor for
 both workflows.
+
+```mermaid
+sequenceDiagram
+    participant H as Host
+    participant D as Device
+    H->>D: fresh 16-byte challenge
+    D-->>H: ECDSA-P256 signature (OTP-DEVK key) + public key
+    H->>H: verify signature, match fingerprint vs record
+```
+
+This only proves identity once the device has a provisioned OTP DEVK; on an
+unprovisioned dev board there is no device-bound key and `verify` is refused.
 
 **Enrollment:** when you hand a key out, run `rsk inventory verify` once and
 record `serial + fingerprint`. Any later verify with
@@ -100,4 +111,5 @@ nothing in the wipe path can read or export secrets.
 OTP slots protected by an access code are the one exception — they refuse the
 PIN-free delete; the receipt's `steps.otp` records which slots stayed. A
 follow-up `rsk offboard` after recovering the code, or a full
-[`rsk-wipe`](../build.md) flash nuke, covers that case.
+[`rsk-wipe`](https://github.com/TheMaxMur/RS-Key/blob/main/rsk-wipe/README.md)
+flash nuke, covers that case.

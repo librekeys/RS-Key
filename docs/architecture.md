@@ -1,6 +1,8 @@
 # Architecture
 
-How the firmware is put together — for contributors and the curious.
+How the firmware is put together — for contributors and the curious. For what
+the design does and does not defend against, see the
+[threat model](threat-model.md).
 
 ## The big picture
 
@@ -8,22 +10,21 @@ A composite USB device with three interfaces, seven smart-card applets and
 one storage layer. Day to day everything runs on one RP2350 core — the
 second wakes only to parallelize RSA keygen (below):
 
-```
- USB (embassy-usb, interrupt executor — always responsive)
- ├── FIDO HID (usage page 0xF1D0)  ── CTAPHID framing ──┐
- ├── CCID (smart-card, class 0x0B) ── APDU framing ─────┤
- └── boot keyboard (OTP typing)    ── feature reports ──┤
-                                                        ▼
-                worker task (thread executor — may block for seconds)
-                ├── FIDO2/U2F applet            (rsk-fido)
-                ├── OpenPGP card 3.4            (rsk-openpgp)
-                ├── PIV                         (rsk-piv)
-                ├── OATH                        (rsk-oath)
-                ├── Yubico/Nitro OTP slots      (rsk-otp)
-                ├── management (ykman)          (rsk-mgmt)
-                ├── vendor + rescue             (firmware, rsk-rescue)
-                ▼
-                flash KV store (rsk-fs over sequential-storage)
+```mermaid
+flowchart TD
+    subgraph irq["Interrupt executor — high priority, stays responsive"]
+      fido["FIDO HID<br/>(0xF1D0, CTAPHID)"]
+      ccid["CCID<br/>(class 0x0B, APDU)"]
+      kbd["Boot keyboard<br/>(OTP typing)"]
+    end
+    fido --> worker
+    ccid --> worker
+    kbd --> worker
+    subgraph thread["Thread executor — may block for seconds"]
+      worker["worker task<br/>owns flash + TRNG"]
+      worker --> applets["Applets<br/>FIDO2/U2F · OpenPGP · PIV · OATH<br/>OTP · mgmt · vendor + rescue"]
+    end
+    applets --> fs["flash KV store<br/>(rsk-fs over sequential-storage)"]
 ```
 
 **Two executors.** USB and the transports live on a high-priority
@@ -34,20 +35,26 @@ wait — blocks only the worker, while the interrupt executor keeps the bus
 enumerated, streams CCID/CTAPHID keepalives, and animates the LED. No
 mutexes: ownership does the synchronization.
 
-**Why (mostly) one core:** the async executor gives the *concurrency* the
-upstream design used a second core and hand-rolled queues for. Core 1 is
-kept out of the transport picture and has exactly one job: during on-card
-RSA generation both cores race the prime search — independent random
-candidates, each core with its own DRBG stream, one shared two-prime pool
-(`firmware/src/core1.rs`). Measured: RSA-2048 generation drops from ~8.9 s
-to ~4.3 s mean (2.07×). Three details make that real: the Fermat-filter
-modexp (C + asm) executes from SRAM, because two cores running it from XIP
-throttle each other on the shared flash cache (~40% per core, measured); the
-key returns the moment the pool completes, with core1's last candidate
-finishing in the background; and a core1 that ever stops answering latches
-the engine into single-core mode rather than stalling the worker (`INS 0x12`
-on the vendor applet reads the engine's counters and flags). Outside keygen
-core1 parks in WFE, and embassy-rp pauses it around every flash
+**Why (mostly) one core.** The async executor provides the *concurrency* that
+the upstream design used a second core and hand-rolled queues for. Core 1 is
+kept out of the transport path and has exactly one job: during on-card RSA
+generation both cores race the prime search — independent random candidates,
+each core with its own DRBG stream, feeding one shared two-prime pool
+(`firmware/src/core1.rs`). Measured, RSA-2048 generation drops from ~8.9 s to
+~4.3 s mean (2.07×).
+
+Three details make that work:
+
+- The Fermat-filter modexp (C + asm) executes from SRAM. Two cores running it
+  from XIP throttle each other on the shared flash cache (~40% per core,
+  measured).
+- The key returns the moment the pool completes; core1's last candidate
+  finishes in the background.
+- A core1 that ever stops answering latches the engine into single-core mode
+  rather than stalling the worker (`INS 0x12` on the vendor applet reads the
+  engine's counters and flags).
+
+Outside keygen, core1 parks in WFE, and embassy-rp pauses it around every flash
 erase/program, so its XIP fetches never collide with flash writes.
 
 ## Crates
@@ -86,7 +93,10 @@ AES-CBC for the FIDO seed (tagged formats: plain vs OTP-rooted generation)
 and AES-GCM for PIV keys; OpenPGP keys sit under the PIN-wrapped DEK chain.
 When the OTP master key gets provisioned later in a device's life, a boot
 pass and lazy PIN-verify hooks migrate every sealed object to the new root
-without losing data.
+without losing data. Until that burn the root derives from on-chip state
+alone, which an attacker with full flash and chip access could reconstruct —
+[threat-model.md](threat-model.md) covers what at-rest sealing does and does
+not buy before provisioning.
 
 ## Device identity
 
@@ -109,8 +119,8 @@ test rigs, not for daily use.
 
 RS-Key reimplements the applet behaviour, file layouts and protocol surface
 of [pico-keys](https://github.com/polhenarejos) (AGPL, see
-[NOTICE](../NOTICE)) in Rust, replacing the C HAL/runtime/transport stack
-with embassy and RustCrypto:
+[NOTICE](https://github.com/TheMaxMur/RS-Key/blob/main/NOTICE)) in Rust,
+replacing the C HAL/runtime/transport stack with embassy and RustCrypto:
 
 | was (C) | is (Rust) |
 |---|---|

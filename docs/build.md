@@ -10,6 +10,18 @@ nix develop -c env KNOB=value cargo build --release -p firmware [--features ...]
 picotool uf2 convert target/thumbv8m.main-none-eabihf/release/firmware -t elf firmware.uf2
 ```
 
+```mermaid
+flowchart LR
+    knobs["env knobs +<br/>cargo features"] --> build["cargo build<br/>(or nix build)"]
+    build --> elf["firmware.elf"]
+    elf --> conv["picotool uf2 convert"]
+    conv --> uf2["firmware.uf2"]
+    uf2 --> flash["BOOTSEL flash"]
+    uf2 -. "secure boot only" .-> seal["picotool seal --sign<br/>signing key (host-only)"]
+    seal -.-> signed["firmware-signed.uf2"]
+    signed -.-> flash
+```
+
 ## Cargo features
 
 | Feature | Default | Effect |
@@ -22,10 +34,10 @@ picotool uf2 convert target/thumbv8m.main-none-eabihf/release/firmware -t elf fi
 
 | Variable | Default | Values | Effect |
 |---|---|---|---|
-| `VIDPID` | `Yubikey5` | `Yubikey5`, `YubikeyNeo`, `YubiHSM`, `NitroHSM`, `NitroFIDO2`, `NitroStart`, `NitroPro`, `Nitro3`, `Gnuk`, `GnuPG`, `Pico`, `Dev` | USB VID/PID preset. The default `Yubikey5` (`0x1050:0x0407`) is what makes `ykman`, Yubico Authenticator and the stock udev rules work. `Pico` = the Raspberry Pi generic id (`0x2E8A:0x10FD`); `Dev` = a placeholder (`0xFEFF:0xFCFD`). An unknown preset fails the build. **Masquerade ids are for local interop only — never distribute hardware carrying them.** |
+| `VIDPID` | `Yubikey5` | `Yubikey5`, `YubikeyNeo`, `YubiHSM`, `NitroHSM`, `NitroFIDO2`, `NitroStart`, `NitroPro`, `Nitro3`, `Gnuk`, `GnuPG`, `Pico`, `Dev` | USB VID/PID preset. The default `Yubikey5` (`0x1050:0x0407`) is what makes `ykman`, Yubico Authenticator and the stock udev rules work. `Pico` = the Raspberry Pi generic id (`0x2E8A:0x10FD`); `Dev` = a placeholder (`0xFEFF:0xFCFD`). An unknown preset fails the build. **These vendor-mimicking ids are for local interop only — never distribute hardware carrying them.** |
 | `USB_VID` / `USB_PID` | from preset | `0xHHHH` | Raw override, applied on top of the preset (you can override either half alone). |
 | `FW_VERSION` | `5.7.4` | `X.Y.Z` or `X.Y` | The firmware version reported everywhere a tool looks: management DeviceInfo (`ykman info`), FIDO getInfo, CTAPHID INIT, OATH/OTP/PIV version fields. Yubico tools gate features on it; 5.7.4 mimics a current YubiKey 5. Does **not** change the OpenPGP card version (3.4) or the USB `bcdDevice` (an internal build counter). |
-| `XOSC_DELAY_MULT` | `128` | `1..=1024` | Crystal-oscillator startup-delay multiplier ("delayed boot"). A longer settle wait hardens the early-boot clock-switch window against glitch/fault injection. 128 is the embassy default. |
+| `XOSC_DELAY_MULT` | `128` | `1..=1024` | Crystal-oscillator startup-delay multiplier ("delayed boot"). A longer settle wait is intended to harden the early-boot clock-switch window against glitch/fault injection. 128 is the embassy default. |
 | `FLASH_SIZE` | `4M` | bytes, `0xHEX`, or `<n>K`/`<n>M` | External QSPI flash size. build.rs regenerates `memory.x` from it — the KV store stays a fixed 1.5 MB at the top, the code region is the rest. `4M` reproduces the checked-in layout byte-for-byte. Use this for boards with a different flash chip (e.g. `8M`); must be ≥ ~2 MB and ≤ 16 MB. |
 | `LED_PIN` | `16` | `0..=29` | The WS2812 status-LED data GPIO (RP2350A). Default GPIO16 is the Waveshare RP2350-One. Point it at a free GPIO on boards that use 16 for something else; the indicator simply drives whatever pin you pick. |
 | `FAKE_MKEK` / `FAKE_DEVK` | unset | 64 hex chars | **Test builds only.** Bakes a fake OTP master key / device key into the image instead of reading the OTP fuses, so the whole OTP migration path can be exercised with zero fuse writes. The build prints a loud warning and the key is greppable in the binary. Flashing a FAKE build onto a provisioned device migrates its data under the fake key — going back orphans that data (recovery = per-applet resets). Never flash one on a device you care about. |
@@ -72,15 +84,15 @@ the binary (the per-build sandbox dir and the toolchain store path — both
 land in panic-location strings in `.rodata`, plus DWARF in the `.elf`) with
 stable `--remap-path-prefix`, so one `flake.lock` yields one `firmware.uf2`
 on every machine of a platform. The weekly `repro` job in
-[deep-checks](../.github/workflows/deep-checks.yml) proves it — `nix build`
-twice, the second with `--rebuild` so nix compares every output byte — and
-publishes the canonical sha256 in its run summary.
+[deep-checks](https://github.com/TheMaxMur/RS-Key/blob/main/.github/workflows/deep-checks.yml)
+proves it — `nix build` twice, the second with `--rebuild` so nix compares
+every output byte — and publishes the canonical sha256 in its run summary.
 
 To verify a published image: `nix build .#firmware` at the release commit
 and compare hashes. A *sealed* image can't be reproduced by a third party
 (the signature is the signer's); verify the unsigned payload instead, then
 check the seal with `picotool`. The flavors mirror the
-[CI matrix](../.github/workflows/ci.yml):
+[CI matrix](https://github.com/TheMaxMur/RS-Key/blob/main/.github/workflows/ci.yml):
 
 | Attribute | Image |
 |---|---|
@@ -131,6 +143,15 @@ string** override the compile-time defaults — useful to re-identify a device
 without rebuilding. A bad value can make the device enumerate strangely;
 recovery is a BOOTSEL reflash (which never reads the record) or rewriting the
 record over CCID.
+
+The effective identity is resolved in this order:
+
+```mermaid
+flowchart LR
+    a["VIDPID preset"] --> b["USB_VID / USB_PID<br/>raw override (compile time)"]
+    b --> c["phy record<br/>(runtime, at boot)"]
+    c --> d["effective VID/PID<br/>+ product string"]
+```
 
 ## Notes
 

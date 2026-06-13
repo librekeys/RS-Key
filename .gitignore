@@ -14,3 +14,9 @@ result-*
 secure_boot_*.pem
 *.pem
 /tools/tui/target/
+
+# Documentation site: build output and the mermaid assets that
+# `mdbook-mermaid install` generates next to book.toml (not committed).
+/book/
+/mermaid.min.js
+/mermaid-init.js

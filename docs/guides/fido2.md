@@ -1,7 +1,8 @@
 # FIDO2 / WebAuthn / U2F
 
 The FIDO half of the device: passkeys, two-factor security-key logins, and
-legacy U2F. Works with every WebAuthn-capable browser and OS dialog.
+legacy U2F. Works with standard WebAuthn browsers and OS dialogs; what has
+actually been checked is in the [interop matrix](../interop.md).
 
 ## Set a PIN first
 
@@ -17,7 +18,7 @@ verification for). 8 wrong attempts lock the PIN until a factory reset.
 
 Register on any site offering "security key" as a passkey method — the
 browser drives the device; you touch the button when the LED pulses.
-Capacity: **256** resident passkeys.
+Capacity: up to 256 resident passkeys (flash-bound).
 
 Inspect / clean up:
 
@@ -64,8 +65,8 @@ ykman fido reset            # or any WebAuthn "reset security key" UI
 Wipes all FIDO state — resident passkeys, the master seed (⇒ all derived
 non-resident credentials die too), the PIN — and regenerates a fresh
 identity. OpenPGP/PIV/OATH applets are untouched: each applet's reset wipes
-only its own files. The reset must happen within 10 s of plug-in with a
-touch, like a real key.
+only its own files. The reset must happen within 10 s of plug-in, with a
+touch — the standard FIDO anti-accidental-reset gate.
 
 ## Troubleshooting
 

@@ -10,6 +10,10 @@ Prereqs: on Linux, `pcscd` + the `scdaemon.conf` lines from
 gpg --card-status            # reader: Yubico YubiKey RSK …, OpenPGP v3.4
 ```
 
+The reader name contains "Yubico YubiKey" because the default build uses a
+YubiKey USB identity so stock tooling works — a local convenience, not an
+affiliation ([build.md](../build.md)).
+
 ## PINs
 
 | | Default | Unlocks |

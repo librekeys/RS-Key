@@ -52,9 +52,11 @@ each private-key operation then needs a button press.
 
 ## At rest
 
-PIV private keys are stored **AES-GCM-sealed** under the device root (and
-under the OTP master key once [provisioned](../production.md)) — a flash
-dump does not yield key material.
+PIV private keys are stored **AES-GCM-sealed** under the device root. Once the
+OTP master key is [fused](../production.md), a flash dump does not yield key
+material; **before** that burn the seal's root derives from on-chip state that
+an attacker with the flash and chip could reconstruct, so at-rest protection is
+only meaningful after provisioning (see [threat-model.md](../threat-model.md)).
 
 ## Factory reset (PIV only)
 

@@ -15,6 +15,12 @@ audit, identity verify). Irreversible production rituals — secure-boot staging
 OTP fuses, factory resets, soft-lock, attestation import — stay in the CLI on
 purpose, and the cockpit points you at the exact command instead of doing them.
 
+```mermaid
+flowchart LR
+    tui["rsk-tui (host process)"] -->|hidapi / CTAPHID| fido["Device — FIDO"]
+    tui -->|PC/SC / pcscd| ccid["Device — CCID applets<br/>OpenPGP · PIV · OATH · OTP"]
+```
+
 ## Running it
 
 In the dev shell `rsk-tui` is on `PATH`:
@@ -50,17 +56,40 @@ On Linux the CCID half needs `pcscd` + a polkit rule; see
 key plugged in. Demo data is clearly labelled `[DEMO]` and every simulated
 action is prefixed `[demo]`; it never pretends to touch hardware.
 
+A non-interactive snapshot of the simulated device (`rsk-tui --once --demo`)
+gives a sense of what the cockpit reads:
+
+```text
+[DEMO — simulated device]
+device     : serial 37bebfdca282 · fw 5.7.4 · bcd 0x0759
+transports : HID present  PC/SC present  CCID present
+serial     : 37bebfdca282523b
+firmware   : 5.7.4  bcdDevice 0x0759  sdk 3.4
+fido       : U2F_V2, FIDO_2_0, FIDO_2_1  clientPin=true
+backup     : sealed=false  has_seed=true
+seed lock  : off
+secure boot: ENABLED  (enabled=true locked=false bootkey=0x1)
+rollback   : not required  boot version 0/48
+org attest : not installed
+applets    : OpenPGP present  PIV present  OATH present  OTP present
+```
+
+<!-- TODO(docs): a screenshot of the interactive cockpit could live in docs/assets/,
+     but rsk-tui --demo is a full-screen TUI and can't be rendered headlessly here.
+     Capture it manually with `rsk-tui --demo` rather than committing a fabricated
+     image. The ASCII layout below and the --once snapshot above are honest stand-ins. -->
+
 ## Layout
 
 ```
 ┌ header: app · health · device identity · refreshed ─────────────┐
 │ sections │ selected section: status fields + action menu        │
-│  …       │                                                       │
-├──────────┴───────────────────────────────────────────────────────┤
+│  …       │                                                      │
+├──────────┴──────────────────────────────────────────────────────┤
 │ events: recent operations and errors                            │
-├──────────────────────────────────────────────────────────────────┤
+├─────────────────────────────────────────────────────────────────┤
 │ last result · key bindings                                      │
-└──────────────────────────────────────────────────────────────────┘
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 The sidebar narrows and the event panel drops away on small terminals; the UI

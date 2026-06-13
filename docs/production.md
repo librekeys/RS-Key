@@ -31,6 +31,17 @@ exceptions are rows that physically cannot be written from BOOTSEL
 (bootloader-read-only OTP pages): the page-58 *lock* and the
 `ROLLBACK_REQUIRED` flag, each applied by the firmware on explicit command.
 
+```mermaid
+flowchart TD
+    d["Default<br/>flash-derived root · any image boots"]
+    d --> s1["Stage 1 — OTP master key<br/>burn page 58 · migrate · lock"]
+    s1 --> s2a["Stage 2 — secure boot<br/>load-key · harden (non-enforcing)"]
+    s2a --> s2b{{"ENABLE<br/>the one irreversible bit"}}
+    s2b --> s2c["lock key slots + fuse pages"]
+    s2c --> s3["Stage 3 — anti-rollback<br/>(optional)"]
+    s2b -. "a correctly-signed UF2 can always be re-flashed over BOOTSEL" .-> rec["BOOTSEL recovery"]
+```
+
 ## Stage 1 — OTP master key
 
 What it does: writes a random DEVK (device attestation key) and MKEK (master
@@ -67,6 +78,17 @@ What it does: the RP2350 bootrom verifies an ECDSA (secp256k1 + SHA-256)
 signature on every image against a fingerprint fused into OTP. Unsigned or
 foreign-signed images do not boot — the chip falls back to BOOTSEL, where you
 can always drag a correctly-signed UF2 (recovery path).
+
+```mermaid
+flowchart LR
+    build["cargo / nix build"] --> uf2["firmware.uf2"]
+    uf2 --> seal["picotool seal --sign<br/>signing key (host-only)"]
+    seal --> signed["firmware-signed.uf2"]
+    signed --> flash["BOOTSEL flash"]
+    flash --> rom{"bootrom: signature<br/>vs fused fingerprint"}
+    rom -->|verified| run["run the app"]
+    rom -->|rejected| bootsel["fall back to BOOTSEL<br/>(re-flash a signed image)"]
+```
 
 **The permanent consequences:**
 
@@ -174,7 +196,8 @@ gain by booting the previous image**, never for features. History:
 | 1     | bcdDevice 0x074A  | anti-rollback introduced  |
 
 Every signed artifact must carry the **current** epoch — firmware *and*
-[rsk-wipe](../rsk-wipe/README.md) alike (sign the wipe at the current epoch,
+[rsk-wipe](https://github.com/TheMaxMur/RS-Key/blob/main/rsk-wipe/README.md)
+alike (sign the wipe at the current epoch,
 never higher: booting a higher-epoch image advances the counter and orphans
 everything below it).
 

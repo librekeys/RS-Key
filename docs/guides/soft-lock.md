@@ -7,10 +7,19 @@ firmware — refuses every FIDO operation until that key is presented. Your
 identity becomes *device + words*, two factors.
 
 This is the same idea as a wallet passphrase, and it composes with (does not
-replace) the silicon protections: the OTP root and secure boot
-([production.md](../production.md)) stop flash-dump and foreign-firmware
+replace) the silicon protections: once provisioned, the OTP root and secure
+boot ([production.md](../production.md)) stop flash-dump and foreign-firmware
 attacks; the soft-lock additionally stops *your own device in the wrong
 hands*.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Sealed: normal (device-root-sealed seed)
+    Sealed --> Locked: rsk lock enable (PIN + touch)
+    Locked --> Unlocked: rsk lock unlock (256-bit key)
+    Unlocked --> Locked: power cycle / unplug (RAM zeroized)
+    Unlocked --> Sealed: rsk lock disable (PIN + touch)
+```
 
 ## Enable
 

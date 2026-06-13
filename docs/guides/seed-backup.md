@@ -33,6 +33,16 @@ cannot quietly re-export your seed. Corollary: lost words cannot be
 re-exported either — pick a SLIP-39 share count with margin (2-of-3 minimum,
 3-of-5 for the paranoid).
 
+```mermaid
+stateDiagram-v2
+    [*] --> NoSeed
+    NoSeed --> Open: first boot / factory reset (new seed)
+    Open --> Open: rsk backup export (words)
+    Open --> Finalized: rsk backup finalize
+    Finalized --> Finalized: export refused
+    Finalized --> NoSeed: factory reset (new seed)
+```
+
 ## Restore (onto any RS-Key board)
 
 ```sh

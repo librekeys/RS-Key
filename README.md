@@ -2,164 +2,188 @@
 
 [![ci](https://github.com/TheMaxMur/RS-Key/actions/workflows/ci.yml/badge.svg)](https://github.com/TheMaxMur/RS-Key/actions/workflows/ci.yml)
 [![deep-checks](https://github.com/TheMaxMur/RS-Key/actions/workflows/deep-checks.yml/badge.svg)](https://github.com/TheMaxMur/RS-Key/actions/workflows/deep-checks.yml)
+[![docs](https://github.com/TheMaxMur/RS-Key/actions/workflows/pages.yml/badge.svg)](https://themaxmur.github.io/RS-Key/)
 
-**RS-Key** (**RSK**, *Raspberry Security Key* — also a pun on "written in Rust")
-is an open-source security-key firmware for the Raspberry Pi **RP2350**. It
-turns a $5–15 RP2350 board into a USB authenticator that speaks the same
-protocols as a commercial YubiKey or Nitrokey:
+RS-Key (RSK, *Raspberry Security Key* — also a nod to its being written in Rust)
+is open-source security-key firmware for the Raspberry Pi **RP2350**. It makes an
+RP2350 board behave like a USB authenticator and ships the host tooling to drive
+it. It is written in Rust (`no_std`, [embassy](https://embassy.dev)) and is meant
+for development, research, and controlled experiments — **not** as a drop-in
+replacement for an audited commercial key.
 
-- **FIDO2 / WebAuthn / U2F** — passkeys, two-factor login, `ssh ed25519-sk`
-- **OpenPGP card 3.4** — `gpg` signing, encryption, authentication
-- **PIV** — X.509 smart-card (`ykman piv`, PKCS#11)
-- **OATH** — TOTP/HOTP authenticator codes (`ykman oath`, Yubico Authenticator)
-- **Yubico OTP** — including an emulated USB keyboard that types the OTP
-- **Post-quantum FIDO2** — ML-DSA-44 (FIPS 204) credentials, today
-- **Wallet-style seed backup** — BIP-39 / SLIP-39 Shamir shares
-- **At-rest soft-lock** — the FIDO seed leaves flash encrypted to a key only
-  you hold
-- **Signed audit trail** — a tamper-evident on-device event journal,
-  checkpointed by the OTP attestation key (`rsk audit verify`)
-- **Enterprise attestation** — CTAP 2.1 EA with an org-provisioned
-  attestation key/chain (`rsk fido attestation import`)
-- **Silicon root of trust** — OTP-fused master key + RP2350 secure boot
-
-It is written in pure Rust (`no_std`, [embassy](https://embassy.dev/)) with two
-audited exceptions, fuzzed on every parser, and tested against the upstream
-python-fido2 and OpenPGP card test suites.
-
-> ⚠️ **EXPERIMENTAL.** RS-Key is a hobby project. It has not been audited, the
-> hardware has no secure element, and you should not guard secrets you cannot
-> afford to lose (or have stolen) with it. See the
+> **This project is experimental.** It has had no external security audit, the
+> RP2350 is not a secure element, and a stolen board is only as strong as the
+> optional OTP / secure-boot hardening you have applied to it. Don't use it to
+> guard credentials you can't afford to lose or have stolen. Read the
 > [threat model](docs/threat-model.md) and [limitations](docs/limitations.md)
 > before trusting it with anything real.
 
-RS-Key is a from-scratch Rust reimplementation of
-[pico-keys](https://github.com/polhenarejos) (pico-fido / pico-openpgp /
-pico-keys-sdk) by Pol Henarejos, licensed — like upstream —
-under **AGPL-3.0-only**. See [NOTICE](NOTICE).
+## Project status
+
+A working, single-maintainer hobby project under active development. There are
+no releases yet — the supported version is the tip of `main`, and every
+behavior change bumps the USB `bcdDevice` build counter so a build can be named
+precisely. Most of the protocol surface works against real host software; what
+has actually been checked on hardware (with dates) is in
+[docs/interop.md](docs/interop.md). Treat anything not in that matrix as
+unverified.
+
+## What it supports
+
+- **FIDO2 / WebAuthn / U2F** — passkeys, two-factor logins, `ssh ed25519-sk`
+- **OpenPGP card 3.4** — `gpg` signing, decryption, authentication (EC + RSA)
+- **PIV** — X.509 smart-card via `ykman piv` / PKCS#11
+- **OATH** — TOTP / HOTP codes (`ykman oath`, Yubico Authenticator)
+- **Yubico-style OTP** — four slots, plus a USB-keyboard interface that types the code
+- **Seed backup** — export the FIDO master seed as BIP-39 / SLIP-39 words
+- **At-rest soft-lock** — keep the FIDO seed in flash encrypted to a key only you hold
+- **On-device audit journal** and **enterprise (org-provisioned) attestation**
+- **Post-quantum FIDO2 (experimental)** — implements the ML-DSA-44 scheme
+  (COSE −48); advertising it in getInfo is off by default because some shipped
+  browsers reject an unknown algorithm id. This is not a FIPS-validated module.
+
+Capacities are flash-bound and generous (e.g. up to 256 resident passkeys,
+255 OATH accounts, 24 PIV slots, 4 OTP slots); details are in the
+[feature guides](docs/guides/) and [build options](docs/build.md).
+
+```mermaid
+flowchart TD
+    host["Host software<br/>browser · ssh · gpg · ykman · rsk / rsk-tui"]
+    host -->|USB| usb["Composite USB device"]
+    usb --> fido["FIDO HID"]
+    usb --> ccid["CCID (smart-card)"]
+    usb --> kbd["Keyboard (OTP typing)"]
+    fido & ccid & kbd --> applets["Applets: FIDO2/U2F · OpenPGP · PIV · OATH · OTP · mgmt"]
+    applets --> core["Master seed · TRNG · flash store"]
+    core --> rp["RP2350 (no secure element)"]
+```
+
+## What it does not protect against
+
+- **Physical / lab attacks** — decapping, microprobing, fault injection beyond
+  the on-chip glitch detectors, power/EM side channels, and flash-emulation
+  TOCTOU. The RP2350 is not a secure element; if your threat model includes a
+  funded lab, buy a certified key.
+- **A compromised host with the device unlocked** — like any security key, it
+  will perform operations you have authorized while plugged in and unlocked.
+- **Loss of secrets without the optional hardening** — at-rest protection only
+  becomes meaningful after you fuse the OTP master key (see Production, below).
+
+Full reasoning: [docs/threat-model.md](docs/threat-model.md).
 
 ## Hardware
 
-Any RP2350 board with USB. Developed and tested on the **Waveshare
-RP2350-One** (the WS2812 status LED on GPIO16 works out of the box; other
-boards run fine without the LED). The RP2350's dual Cortex-M33, 520 KB SRAM,
-TRNG, OTP fuses and glitch detectors do all the work — there is no secure
-element and no debugger requirement: everything flashes over USB BOOTSEL.
-
-The defaults target a 4 MB chip with the LED on GPIO16; a different flash size
-or LED pin is a build knob (`FLASH_SIZE`, `LED_PIN` — see
-[docs/build.md](docs/build.md)), so most RP2350A boards work with at most a
-one-line change. A standard 12 MHz crystal is assumed.
+Any RP2350 board with USB. Developed and tested on the **Waveshare RP2350-One**
+(WS2812 status LED on GPIO16; boards without an LED run fine). A different flash
+size or LED pin is a one-line build knob. Details:
+[docs/hardware.md](docs/hardware.md).
 
 ## Quick start
 
 ```sh
-git clone <this repo> && cd rs-key
-nix develop                      # toolchain, picotool, host tools — everything
+git clone https://github.com/TheMaxMur/RS-Key && cd RS-Key
+nix develop                       # toolchain, picotool, host tools — everything
 
 cargo build --release -p firmware
 picotool uf2 convert target/thumbv8m.main-none-eabihf/release/firmware -t elf firmware.uf2
 
-# hold BOOTSEL, plug the board in, then:
-cp firmware.uf2 /Volumes/RP2350/         # macOS; on Linux: the RP2350 mass-storage mount
+# hold BOOTSEL, plug the board in, then copy the image to the RP2350 drive:
+cp firmware.uf2 /Volumes/RP2350/  # macOS; on Linux, the mounted RP2350 mass-storage volume
 ```
 
-Re-plug, and the board enumerates as a YubiKey-compatible composite device.
-Enroll a passkey in any browser, or an SSH key:
+Re-plug the board and it enumerates as a composite USB authenticator. The default
+build requires a **physical touch** (the BOOTSEL button) for FIDO operations;
+build with `--no-default-features` for a no-touch build (the automated test
+suites need it). Full walkthrough: [docs/quickstart.md](docs/quickstart.md).
+On Linux, the CCID half needs a little host setup: [docs/linux.md](docs/linux.md).
+
+## Development setup
+
+`nix develop` is the whole setup — Rust with the `thumbv8m.main-none-eabihf`
+target, `picotool`, the Python host stack, and the security tooling. One command
+is the merge gate, and CI runs exactly the same script:
 
 ```sh
-ssh-keygen -t ed25519-sk -f ~/.ssh/id_ed25519_sk   # 2 touches (+ PIN if set)
-ssh-copy-id -i ~/.ssh/id_ed25519_sk you@host
-ssh -i ~/.ssh/id_ed25519_sk you@host               # logs in with one touch
+nix develop -c ./scripts/check.sh   # fmt, clippy, host tests, firmware builds, audit, deny, gitleaks
 ```
 
-The default build requires a **physical touch** (the BOOTSEL button) for FIDO
-operations — like a real key. Build with `--no-default-features` for a
-no-touch test build (the automated test suites need it).
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/testing.md](docs/testing.md).
 
-Full walkthrough: [docs/quickstart.md](docs/quickstart.md) ·
-Linux host setup (pcscd/udev/polkit): [docs/linux.md](docs/linux.md)
+## Production / secure boot (irreversible — read first)
 
-## Two ways to run it
+By default the firmware flashes by drag-and-drop and roots its at-rest
+encryption in a key derived on the device. An optional, opt-in path hardens
+that: it fuses a random master key into RP2350 OTP and enables secure boot so
+the board runs only images you sign.
 
-| | Dev (default) | Production-ish (opt-in, **experimental**) |
-|---|---|---|
-| Flash | drag-and-drop UF2 | UF2 **signed** with your key (`picotool seal`) |
-| Master-key root | flash-derived | **OTP-fused MKEK**, BOOTSEL-unreadable |
-| Boot | any image | **secure boot** — only your signed images |
-| Set up by | nothing to do | [docs/production.md](docs/production.md) |
+```mermaid
+flowchart LR
+    subgraph dev["Default (development)"]
+      d1["drag-and-drop UF2"] --> d2["flash-derived key"] --> d3["boots any image"]
+    end
+    subgraph prod["Production (opt-in)"]
+      p1["sign UF2<br/>picotool seal"] --> p2{{"burn OTP fuses<br/>IRREVERSIBLE"}} --> p3["secure boot:<br/>only your signed images"]
+    end
+```
 
-The production path burns **irreversible** RP2350 fuses, changes your reflash
-workflow forever (signed images only) and can brick the board if you skip
-steps. It is also what makes a stolen board's flash dump worthless. Read
-[docs/production.md](docs/production.md) end to end first.
-
-## Capacity
-
-Everything is stored in the RP2350's flash, so limits are generous:
-
-| | **RS-Key** | YubiKey 5 (fw 5.7) |
-|---|---|---|
-| Resident passkeys | **256** | 100 (25 before 5.7) |
-| OATH accounts | **255** | 64 (32 before 5.7) |
-| PIV key slots | 24 + attestation | 24 + attestation |
-| OpenPGP keys | 3 (SIG/DEC/AUT) | 3 + attestation |
-| OTP slots | **4** (2 Yubico-compatible + 2 extra) | 2 |
-| FIDO credBlob / largeBlob | 128 B / 2048 B | 32 B / 4096 B |
-| ML-DSA-44 (PQC) credentials | **yes** (COSE −48) | no |
-
-Non-resident credentials (the usual `ssh-sk` and 2FA kind) are derived from
-the master seed and are effectively unlimited.
+These steps **burn one-time-programmable fuses**: they cannot be undone, they
+change your reflash workflow forever (signed images only), and a mistake can
+brick the board. They are also what makes a stolen board's flash dump useless.
+Read [docs/production.md](docs/production.md) end to end before running anything.
 
 ## Host tools
 
-The dev shell puts three tools on `PATH`:
+Inside the dev shell two commands are on `PATH`:
 
-- **`rsk`** — the device CLI: `rsk status`, `rsk backup`, `rsk lock`,
-  `rsk secure-boot`, `rsk otp`, `rsk fido`, `rsk led`, `rsk reboot`, …
-- **`rsk-tui`** — a live terminal cockpit: sectioned device state, seed
-  backup, LED, audit, identity verify, reboot ([guide](docs/guides/tui.md);
-  `rsk-tui --demo` needs no hardware)
-- **`rsk-wipe`** — a RAM-only flash wiper for clean-slate testing
+- **`rsk`** — the device CLI (Python): `rsk status`, `rsk backup`, `rsk lock`,
+  `rsk secure-boot`, `rsk otp`, `rsk fido`, `rsk led`, `rsk reboot`, … (`rsk --help`)
+- **`rsk-tui`** — a terminal dashboard for day-to-day reads and a few in-band
+  actions ([guide](docs/guides/tui.md); `rsk-tui --demo` needs no hardware)
+
+Separately, **`rsk-wipe`** is a RAM-only flash-erase *image* you flash
+deliberately to wipe a board for clean-slate testing — it is built and flashed
+like firmware, not run from `PATH` ([rsk-wipe/README.md](rsk-wipe/README.md)).
 
 ## Documentation
+
+The docs live in [docs/](docs/) and are published as a site:
+**<https://themaxmur.github.io/RS-Key/>**.
 
 | | |
 |---|---|
 | [Quick start](docs/quickstart.md) | flash, enroll, first login |
-| [Build options](docs/build.md) | every flag: VID/PID presets, firmware version, touch, PQC, … |
-| [Production setup](docs/production.md) | signed boot + OTP fuses, step by step (**irreversible**) |
-| [Feature guides](docs/guides/) | FIDO2, SSH, OpenPGP, PIV, OATH, OTP slots, backup, soft-lock, LED, audit, attestation, fleet |
-| [Terminal cockpit](docs/guides/tui.md) | `rsk-tui`: sections, key bindings, workflows, safety model |
-| [Threat model](docs/threat-model.md) | what it protects against, and what it does not |
-| [Architecture](docs/architecture.md) | crates, executors, flash layout |
-| [Limitations](docs/limitations.md) | what is not covered, and why |
-| [`unsafe` audit](docs/unsafe.md) | every unsafe site, justified |
-| [Testing](docs/testing.md) | host tests, fuzzing, on-device suites |
-| [Interop](docs/interop.md) | does it work with real `gpg`/`ssh`/browsers/`ykman` — the matrix |
-| [Linux setup](docs/linux.md) | pcscd, udev, polkit, scdaemon |
-| [Motivation](docs/motivation.md) | why this exists |
-| [Contributing](CONTRIBUTING.md) | setup, the merge gate, code rules, how PRs land |
-| [Security policy](SECURITY.md) | how to report vulnerabilities (privately) |
+| [Hardware](docs/hardware.md) | supported boards and build knobs |
+| [Build options](docs/build.md) | every flag: VID/PID presets, version, touch, PQC, FIPS profile |
+| [Production setup](docs/production.md) | OTP fuses + secure boot, step by step (**irreversible**) |
+| [Feature guides](docs/guides/) | FIDO2, SSH, OpenPGP, PIV, OATH, OTP, backup, soft-lock, LED, audit, … |
+| [Threat model](docs/threat-model.md) · [Limitations](docs/limitations.md) | what it protects against, and what it does not |
+| [Architecture](docs/architecture.md) · [`unsafe` audit](docs/unsafe.md) | how it's built; every `unsafe` site |
+| [Testing](docs/testing.md) · [Interop](docs/interop.md) | host tests, fuzzing; real-tool results |
+| [Linux setup](docs/linux.md) · [Motivation](docs/motivation.md) | pcscd/udev/polkit; why this exists |
 
-## Limitations (the honest short list)
+Preview the site locally with `nix develop -c ./scripts/docs.sh serve`
+(`build` / `check` also available). To publish it, enable Pages once in the
+repo: **Settings → Pages → Build and deployment → Source = "GitHub Actions"**;
+the [pages workflow](.github/workflows/pages.yml) does the rest on push to `main`.
 
-- **No secure element.** The RP2350 + OTP + secure boot is a real hardening
-  story, but physical attacks (decap, fault injection beyond the glitch
-  detectors, flash-emulation TOCTOU on the XIP image) are out of scope.
+## Limitations (short list)
+
+- **No secure element.** OTP + secure boot is real hardening, but physical
+  attacks are out of scope.
 - **Seed backup covers the deterministic identity only** — resident passkeys,
   OpenPGP and PIV keys do not survive a board swap.
-- **No Brainpool / X448 / Ed448** OpenPGP curves (no production-grade
-  `no_std` Rust implementations).
-- The default USB identity **masquerades as a YubiKey** for tool
-  compatibility; don't distribute devices with those IDs.
+- **No Brainpool / X448 / Ed448** OpenPGP curves (no mature `no_std` Rust
+  implementations).
+- The default USB identity **matches a YubiKey's** for tool compatibility; this
+  is a local convenience, not for distribution.
 
 Details and reasoning: [docs/limitations.md](docs/limitations.md).
 
 ## License
 
-**AGPL-3.0-only** — see [LICENSE](LICENSE), [NOTICE](NOTICE) and
-[COMPLIANCE.md](COMPLIANCE.md). RS-Key is a behavioral reimplementation of
-AGPL-3.0-**only** pico-keys; the upstream grant is version-3-only (verified
-from its source headers), so RS-Key is too — it stays AGPL, and so must forks.
-Not affiliated with or endorsed by Yubico, Nitrokey or Raspberry Pi.
+**AGPL-3.0-only** — see [LICENSE](LICENSE), [NOTICE](NOTICE), and
+[COMPLIANCE.md](COMPLIANCE.md). RS-Key is a from-scratch Rust reimplementation of
+the AGPL-3.0-**only** [pico-keys](https://github.com/polhenarejos) firmware
+family (pico-fido / pico-openpgp / pico-keys-sdk) by Pol Henarejos; the upstream
+grant is version-3-only, so RS-Key inherits it and so must forks. Not affiliated
+with or endorsed by Yubico, Nitrokey, or Raspberry Pi.

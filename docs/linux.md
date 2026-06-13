@@ -1,7 +1,7 @@
 # Linux host setup
 
 The board enumerates as a composite **FIDO HID + CCID** device under the
-Yubico masquerade VID/PID `0x1050:0x0407` (the default build; other presets:
+default YubiKey USB identity `0x1050:0x0407` (the default build; other presets:
 [build.md](build.md)). The two transports have different host requirements on
 Linux:
 
@@ -9,6 +9,16 @@ Linux:
 |---|---|---|
 | **FIDO HID** (`0xF1D0`) | WebAuthn, `ssh ed25519-sk`, `fido2-token`, python-fido2 | yes, once the yubico udev rules grant your user access to the hidraw node |
 | **CCID** (PC/SC) | OpenPGP, PIV, OATH, Yubico-OTP, `ykman`, `gpg --card-status` | needs `pcscd` running **and** a polkit rule to use it as a non-root / SSH-session user |
+
+```mermaid
+flowchart LR
+    subgraph fido["FIDO HID — usually works out of the box"]
+      a["WebAuthn · ssh-sk · fido2-token"] --> b["hidraw + yubico udev rules"]
+    end
+    subgraph ccid["CCID (PC/SC) — needs two pieces"]
+      c["ykman · gpg · OpenPGP / PIV / OATH"] --> d["pcscd + polkit rule<br/>(+ disable-ccid for gpg)"]
+    end
+```
 
 FIDO generally works after installing the standard yubico udev rules. CCID is
 the part that needs the extra two pieces below: a **polkit rule** (so a
@@ -35,7 +45,7 @@ Add to your `configuration.nix`:
 
   # udev rules that grant access to the FIDO hidraw node and the YubiKey
   # interfaces. The stock yubico rules already match our 0x1050:0x0407
-  # masquerade, so no custom rule is needed.
+  # identity, so no custom rule is needed.
   services.udev.packages = [
     pkgs.yubikey-personalization
     pkgs.libfido2

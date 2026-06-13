@@ -1,12 +1,18 @@
 # OTP slots — Yubico OTP, challenge-response, static passwords
 
-Four programmable slots (a real YubiKey has two): slots 1–2 are
-YubiKey-compatible and fully manageable with `ykman otp`; slots 3–4 are the
-Nitrokey-style extras, managed over CCID (e.g. `nitropy` or raw APDUs —
-ykman doesn't know they exist).
+Four programmable slots. Slots 1–2 are YubiKey-compatible and fully manageable
+with `ykman otp`; slots 3–4 are two extra slots managed over CCID (e.g.
+`nitropy` or raw APDUs — `ykman` doesn't know they exist).
 
-The party trick: the device is also a **USB keyboard**. Pressing the button
-*types* the slot's output wherever your cursor is.
+The device is also a **USB keyboard**: pressing the button *types* the slot's
+output wherever your cursor is.
+
+```mermaid
+flowchart LR
+    press["button press"] --> kbd["USB HID keyboard"] --> types["types the slot output"]
+    ykman["ykman otp"] --> c1["CCID"] --> s12["slots 1–2"]
+    raw["nitropy / raw APDU"] --> c2["CCID"] --> s34["slots 3–4"]
+```
 
 ## Slot selection by presses
 

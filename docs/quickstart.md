@@ -2,6 +2,17 @@
 
 From zero to a working security key in about ten minutes.
 
+> This is experimental firmware with no security audit and no secure element.
+> It's fine for trying things out and for credentials you can afford to lose;
+> see the [threat model](threat-model.md) before using it for anything real.
+
+```mermaid
+flowchart LR
+    a["nix develop<br/>cargo build"] --> b["firmware.uf2"]
+    b --> c["hold BOOT,<br/>plug in"] --> d["copy .uf2 to<br/>RP2350 drive"]
+    d --> e["board reboots,<br/>enumerates over USB"] --> f["set PIN,<br/>enroll a passkey / ssh key"]
+```
+
 ## What you need
 
 - An RP2350 board (tested: Waveshare RP2350-One; any RP2350 with USB works)
@@ -20,9 +31,10 @@ picotool uf2 convert target/thumbv8m.main-none-eabihf/release/firmware -t elf fi
 ```
 
 This is the **touch build**: FIDO operations (registering, logging in) require
-a press of the BOOTSEL button, like the touch pad on a commercial key. For a
-no-touch build (needed by the automated test suites, or if your board is hard
-to reach) add `--no-default-features`. All build knobs: [build.md](build.md).
+a press of the BOOTSEL button — it stands in for the touch sensor on a typical
+hardware key. For a no-touch build (needed by the automated test suites, or if
+your board is hard to reach) add `--no-default-features`. All build knobs:
+[build.md](build.md).
 
 ## 2. Flash
 
@@ -31,7 +43,9 @@ to reach) add `--no-default-features`. All build knobs: [build.md](build.md).
 2. Copy the image: `cp firmware.uf2 /Volumes/RP2350/` (macOS) or to the
    mounted drive on Linux.
 3. The board reboots itself and enumerates as
-   `Yubico YubiKey RSK OTP+FIDO+CCID`.
+   `Yubico YubiKey RSK OTP+FIDO+CCID`. (The product string contains "Yubico
+   YubiKey" because the default build uses a YubiKey USB identity so stock
+   tooling works — a local convenience only, see [build.md](build.md).)
 
 Check it:
 
@@ -51,7 +65,7 @@ rsk fido set-pin
 ```
 
 Browsers and `ssh-keygen` will prompt for it when enrolling. 8 wrong attempts
-brick the PIN until reset, like a real key.
+lock the PIN until a reset — standard security-key behaviour.
 
 ## 4. Enroll something
 
@@ -82,14 +96,15 @@ rsk backup finalize                       # seals the export window
 ```
 
 The words recover your deterministic FIDO identity (ssh-sk logins, 2FA
-registrations) onto a fresh board with `rsk backup restore`. They do **not**
-cover resident passkeys, OpenPGP or PIV keys — see
+registrations) onto a fresh board with `rsk backup restore`. Anyone who has the
+words can recreate that identity on their own board, so store them like cash.
+They do **not** cover resident passkeys, OpenPGP or PIV keys — see
 [guides/seed-backup.md](guides/seed-backup.md).
 
 ## Where next
 
-- [Feature guides](guides/) — OpenPGP with gpg, PIV, OATH codes, OTP slots,
-  soft-lock, LED colors
+- [Feature guides](guides/fido2.md) — OpenPGP with gpg, PIV, OATH codes, OTP
+  slots, soft-lock, LED colors
 - [production.md](production.md) — fuse the master key into OTP + enable
   secure boot (irreversible, read first)
 - [threat-model.md](threat-model.md) — what this device actually protects

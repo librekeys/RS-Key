@@ -1,40 +1,48 @@
 # Limitations — what RS-Key does not do, and why
 
-Honest accounting of the gaps, each with its reasoning. "Not yet" and "never"
-are marked.
+Each gap below comes with its reasoning. "Not yet" and "never" are marked. The
+project as a whole is experimental and unaudited; the [threat model](threat-model.md)
+covers the security boundary, this page covers feature and hardware gaps.
 
 ## Cryptography
 
-- **Brainpool curves (OpenPGP)** — not offered. There is no production-grade
+- **Brainpool curves (OpenPGP)** — not offered. There is no mature, audited
   `no_std` Rust implementation of brainpoolP256/384/512r1; the existing
   crates are experimental. The applet does not advertise the curves, so
   clients never select them. *Status: until a serious crate exists.*
 - **X448 / Ed448 (OpenPGP)** — not offered, same reason: RustCrypto coverage
   of Curve448 is thin and unaudited. Cv25519/Ed25519 plus the NIST curves and
   secp256k1 cover practical use. *Status: until a serious crate exists.*
-- **RSA-3072/4096 on-card generation is slow** — the prime search dominates,
-  and the search cost is the *rejection* of hundreds of composite candidates,
-  each one asm-modexp-bound. That is already on both cores with the modexp hot
-  path in SRAM ([architecture](architecture.md)): RSA-2048 ~8.9 s → ~4–6 s,
-  RSA-3072 ~35 s → ~22 s, RSA-4096 ~65 s → ~50 s, all dominated by how many
-  candidates the draw happens to need (the per-keygen spread is wide — 17 s to
-  124 s seen at 4096 — because that count is random, not because the silicon
-  varies). Per candidate the throughput is ~6.9 ms across both cores. The
-  Baillie-PSW that confirms a *survivor* is split between an asm strong
-  Miller-Rabin and a software Lucas test, but survivors are only a handful per
-  keygen, so neither half moves the total — the lever is fewer candidates
-  reaching the modexp, i.e. a deeper small-prime sieve. How deep is set by the
-  measured cost ratio: one strong-MR modexp is ~35 ms (1024-bit) / ~239 ms
-  (2048-bit) against ~11 µs / ~23 µs for one trial division, so it pays to
-  sieve by every prime up to ~3.1k / ~10.5k — far past the old flat
-  256-prime (≤1619) sieve. The sieve depth now scales with key size
-  accordingly (448 primes at RSA-2048 … 1280 at RSA-4096), and the sieve runs
-  *incrementally*: a candidate stream `n, n+2, n+4, …` from a random odd start,
-  each residue `n mod pᵢ` stepped by one add instead of re-derived by a Horner
-  pass (OpenSSL/GMP do the same). That removes almost all of the sieve cost —
-  the primality decision (strong MR + Lucas) is untouched, so key strength is
-  unchanged. Confirmed by same-device A/B (per-candidate cost, which divides
-  out the prime-search-luck variance): the depth-scaling took **RSA-2048
+- **RSA-3072/4096 on-card generation is slow.** The cost is dominated by the
+  prime search — specifically by *rejecting* hundreds of composite candidates,
+  each one asm-modexp-bound. Both cores run the search with the modexp hot path
+  in SRAM ([architecture](architecture.md)). Typical timings, measured on the
+  reference board (single-core → dual-core):
+
+  | key | before | after |
+  |---|---|---|
+  | RSA-2048 | ~8.9 s | ~4–6 s |
+  | RSA-3072 | ~35 s | ~22 s |
+  | RSA-4096 | ~65 s | ~50 s |
+
+  The total is set by how many candidates a given draw happens to need, which is
+  random — the per-keygen spread is wide (17 s to 124 s seen at 4096) because
+  that count varies, not because the silicon does. Per candidate the throughput
+  is ~6.9 ms across both cores.
+
+  The lever is *fewer candidates reaching the modexp*, i.e. a deeper small-prime
+  sieve. (The Baillie–PSW that confirms a survivor — asm strong Miller–Rabin
+  plus a software Lucas test — runs only a handful of times per keygen, so it
+  doesn't move the total.) Depth is set by the measured cost ratio: one
+  strong-MR modexp is ~35 ms (1024-bit) / ~239 ms (2048-bit) against ~11 µs /
+  ~23 µs for one trial division, so it pays to sieve by every prime up to
+  ~3.1k / ~10.5k — far past the old flat 256-prime (≤1619) sieve. Depth now
+  scales with key size (448 primes at RSA-2048 … 1280 at RSA-4096), and the
+  sieve runs *incrementally*: a candidate stream `n, n+2, n+4, …` from a random
+  odd start, each residue `n mod pᵢ` stepped by one add instead of re-derived by
+  a Horner pass (OpenSSL/GMP do the same). The primality decision is untouched,
+  so key strength is unchanged. Same-device A/B (per-candidate cost, which
+  divides out the prime-search-luck variance): depth-scaling took **RSA-2048
   7.84 → 6.48 ms/candidate and RSA-4096 36.0 → 26.2 ms** versus the old flat
   256-prime sieve, and the incremental step took those a further **6.48 → 5.28
   ms (−18.5%) and 26.2 → 20.9 ms (−20.4%)**. The device streams keepalives
@@ -44,11 +52,12 @@ are marked.
 - **ML-KEM is scaffolding** — compiled, tested, unused: no CTAP PIN/UV
   protocol number for PQC key agreement exists yet to implement.
   *Status: waiting on standards.*
-- **PQC interop is ahead of the ecosystem** — ML-DSA-44 credentials work and
-  verify, but no browser or mainstream WebAuthn library consumes COSE −48
-  against security keys yet, and released Firefox versions abort getInfo if
-  the algorithm is *advertised* (hence the `advertise-pqc` build flag,
-  default off — capability stays on regardless).
+- **PQC interop is limited by client support** — ML-DSA-44 credentials work and
+  verify on-device, but no browser or mainstream WebAuthn library consumes
+  COSE −48 against security keys yet, and released Firefox versions abort
+  getInfo if the algorithm is *advertised* (hence the `advertise-pqc` build
+  flag, default off — capability stays on regardless). This is the ML-DSA-44
+  scheme, not a FIPS-validated module.
 
 ## Backup & migration
 
@@ -92,7 +101,7 @@ are marked.
 
 ## Protocol / compatibility
 
-- **The default USB identity is a YubiKey masquerade** (`0x1050:0x0407`,
+- **The default USB identity mimics a YubiKey** (`0x1050:0x0407`,
   reader name `Yubico YubiKey RSK …`, reported firmware 5.7.4). This is what
   makes `ykman`, Yubico Authenticator and stock udev rules work, and it is
   strictly a local convenience: distributing hardware with Yubico's

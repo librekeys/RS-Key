@@ -1,6 +1,6 @@
 # Testing
 
-Four layers, fastest first. The protocol and applet crates are
+Several layers, fastest first. The protocol and applet crates are
 hardware-agnostic on purpose — only `firmware` touches the HAL — so
 everything except board bring-up is tested and fuzzed on the host, with the
 device reserved for end-to-end integration.
@@ -13,6 +13,13 @@ device reserved for end-to-end integration.
 | Kani proofs | bounded model checking — every input, not a sample | `#[cfg(kani)]` in the crates |
 | `no_std` build | the crates still link for the device | default `thumbv8m` target |
 | On-device tests | real USB + flash on the board | `tests/*.py` |
+
+```mermaid
+flowchart LR
+    u["Host unit tests"] --> f["Fuzzing"] --> m["Miri"] --> k["Kani proofs"] --> n["no_std build"] --> d["On-device tests"]
+```
+
+Left to right: fast and host-only, tapering to slow and needs-a-board.
 
 ## The one command
 
@@ -198,10 +205,11 @@ nix develop -c python tests/75_seed_backup.py --pin <your PIN>
 - The FIDO PIN is never guessed: destructive PIN tests take `--pin`
   explicitly.
 
-Two external suites validated the implementation: Yubico's python-fido2
+Two external suites were run against the implementation: Yubico's python-fido2
 test corpus and the Gnuk/OpenPGP card suite (see
-[third_party/](../third_party/) if vendored, or run them from their
-upstream checkouts).
+[third_party/](https://github.com/TheMaxMur/RS-Key/tree/main/third_party) if
+vendored, or run them from their upstream checkouts). Running an upstream
+corpus shows conformance on the cases it covers; it is not a security audit.
 
 ## Real-world interop
 
@@ -223,3 +231,13 @@ attached, the `tests/` scripts. The scheduled `deep-checks` workflow is the
 Miri, fuzz and Kani commands from this page, weekly, plus a `repro` job
 that builds the hermetic firmware twice and requires bit-identical outputs
 ([build.md](build.md#nix-build-hermetic-no-dev-shell)). No hidden state.
+
+```mermaid
+flowchart TB
+    subgraph commit["Every commit / PR — the merge gate"]
+      c["check.sh: fmt · clippy · host tests · firmware builds · audit · deny · gitleaks"]
+    end
+    subgraph weekly["Weekly — deep-checks"]
+      w["Miri · timed libFuzzer · Kani · repro (bit-identical build)"]
+    end
+```

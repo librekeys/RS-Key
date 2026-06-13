@@ -24,7 +24,7 @@ ssh -i ~/.ssh/id_ed25519_sk you@server      # one touch, no PIN
 ```
 
 PIN is demanded at *enrollment* (credential creation is PIN-gated); plain
-logins are user-presence only — exactly like a YubiKey. Want PIN-per-login?
+logins are user-presence only (one touch, no PIN). Want PIN-per-login?
 Enroll with `ssh-keygen -t ed25519-sk -O verify-required`.
 
 ## macOS

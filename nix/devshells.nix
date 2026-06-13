@@ -32,6 +32,13 @@
       pkgs.cargo-audit # SCA: RustSec advisory scan of Cargo.lock
       pkgs.cargo-deny # SCA: advisories + licenses + source/ban policy
 
+      # Documentation site (see scripts/docs.sh): the GitHub Pages source is the
+      # docs/ tree rendered by mdBook; mdbook-mermaid renders the diagrams; lychee
+      # is the offline broken-link checker.
+      pkgs.mdbook
+      pkgs.mdbook-mermaid
+      pkgs.lychee
+
       # Host-side tooling: the `rsk` CLI (tools/rsk) + the `rsk-tui` dashboard
       # (tools/tui) + the CTAPHID/FIDO device tests (tests/). See host-tools.nix
       # for the Python deps.
@@ -71,6 +78,7 @@
       echo "Fuzz:   nix develop .#fuzz -c cargo fuzz run <target>"
       echo "CLI:    rsk status | rsk backup … | rsk secure-boot … | rsk otp … (rsk --help)"
       echo "TUI:    rsk-tui                    # live device dashboard"
+      echo "Docs:   ./scripts/docs.sh serve    # preview the docs site (build|check)"
     '';
   };
 

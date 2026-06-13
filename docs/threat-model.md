@@ -4,6 +4,22 @@ What RS-Key defends against, what it deliberately does not, and the honest
 residuals in between. The defenses compose in tiers — each one assumes the
 ones before it.
 
+```mermaid
+flowchart TB
+    attacker["Attacker-controlled USB bytes"]
+    oos["Out of scope:<br/>physical / lab attacks · a compromised, unlocked host"]
+    subgraph rp["RP2350 — NOT a secure element"]
+      parse["Memory-safe parsers<br/>(safe Rust + fuzzing)"]
+      gates["Protocol gates<br/>PIN/UV · touch · mgmt-key"]
+      keys["Key material"]
+      seal["At-rest seal<br/>(meaningful only after the OTP master-key burn)"]
+      parse --> gates --> keys
+      seal --> keys
+    end
+    attacker --> parse
+    oos -. not defended .-> rp
+```
+
 ## Assets
 
 The FIDO master seed (every non-resident credential derives from it),
@@ -96,6 +112,19 @@ the seed under the *destination* chip's root. The host driving a backup
 necessarily sees the seed plaintext — do it on a machine you trust.
 Scope: the deterministic identity only (resident passkeys, OpenPGP, PIV are
 not covered).
+
+```mermaid
+sequenceDiagram
+    participant U as You
+    participant H as Host
+    participant D as Device
+    U->>D: touch + PIN/UV (when set)
+    H->>D: ephemeral P-256 ECDH
+    D-->>H: seed over HKDF → ChaCha20-Poly1305 channel
+    Note over H: the host necessarily sees the seed in the clear
+    H-->>U: BIP-39 / SLIP-39 words
+    U->>D: finalize → export refused until a full reset
+```
 
 ## Zeroization
 

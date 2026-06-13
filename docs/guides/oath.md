@@ -1,7 +1,7 @@
 # OATH — TOTP / HOTP codes
 
 The device stores authenticator-app secrets and computes the 6/8-digit codes
-on-card (YKOATH protocol). Up to **255 accounts**. Clients: `ykman oath` and
+on-card (YKOATH protocol). Up to 255 accounts. Clients: `ykman oath` and
 Yubico Authenticator (desktop + mobile via USB).
 
 ## Add accounts
@@ -35,9 +35,9 @@ ykman oath access remember          # cache it on this host
 ```
 
 Without a password the account list is readable by anything that can reach
-the CCID interface — same default as a real key; the password (and per-account
-`--touch`) is the opt-in hardening. Brute-forcing the password over the wire
-is not practical (full-length validation, no one-byte oracle).
+the CCID interface; the password (and per-account `--touch`) is the opt-in
+hardening. Brute-forcing the password over the wire is not practical
+(full-length validation, no one-byte oracle).
 
 ## Manage
 
@@ -50,8 +50,9 @@ ykman oath reset                    # wipe the OATH applet only
 
 ## Notes
 
-- Secrets live in device flash, sealed at rest; codes are computed on-card —
-  the secret never returns to the host after `add`.
+- Secrets live in device flash, sealed under the device root (and the OTP
+  master key once [provisioned](../production.md)); codes are computed on-card,
+  so the secret never returns to the host after `add`.
 - OATH accounts are **not** covered by the [seed backup](seed-backup.md):
   keep your otpauth URIs/QRs somewhere safe, or re-enroll on loss.
 - HOTP counters are persisted; touch-required HOTP accounts only burn their

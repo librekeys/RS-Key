@@ -3,9 +3,10 @@
 An **opt-in build flavor** that bakes a locked, FIPS-style algorithm policy
 into the image. Nothing is removed from the codebase or from the default
 build — without the flag the firmware is byte-for-byte the usual one. With
-it, the policy is part of the signed image, and [secure boot](../production.md)
-guarantees the device runs nothing else: a policy you cannot toggle off at
-runtime, because there is no runtime knob to toggle.
+it, the policy is part of the signed image, and once
+[secure boot](../production.md) is enabled the device runs nothing but that
+signed image: a policy you cannot toggle off at runtime, because there is no
+runtime knob to toggle.
 
 ```sh
 cargo build --release -p firmware --features fips-profile
@@ -15,8 +16,7 @@ cargo build --release -p firmware --features fips-profile
 > **A profile, not a validation.** Nothing here is FIPS 140-3 *validated* —
 > no CMVP certificate, no validated module boundary. This profile restricts
 > the device to FIPS-approved *algorithms* and documents exactly where the
-> line is drawn. Vendors that paywall this exact distinction are counting on
-> you not reading it.
+> line is drawn.
 
 ## What the profile locks
 

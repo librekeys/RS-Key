@@ -115,6 +115,20 @@ A protocol-visible change should come with a test at the level where it's
 visible: a host test if the logic is host-testable, a `tests/` script if only
 the real USB stack exercises it.
 
+## Docs
+
+The prose docs live in `docs/` (plain Markdown) and are also published as an
+mdBook site — `docs/SUMMARY.md` is the nav, `book.toml` is the config. Diagrams
+are Mermaid code blocks. Preview and check them from the dev shell:
+
+```sh
+./scripts/docs.sh serve     # live preview at localhost:3000
+./scripts/docs.sh check     # build + offline broken-link check (run before a docs PR)
+```
+
+Keep the README short — it's the entry point; put detail in `docs/` and link to
+it. The site deploys on push to `main` via `.github/workflows/pages.yml`.
+
 ## Commits and PRs
 
 Commit subjects use the zone prefix you see in `git log` — `fido:`, `piv:`,

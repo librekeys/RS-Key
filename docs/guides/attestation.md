@@ -3,8 +3,8 @@
 Out of the box every RS-Key attests with a per-device self-signed certificate
 (built over the seed at first boot). An organization can replace that with its
 **own attestation key and certificate chain**, so its relying parties can
-verify "this credential was created on one of *our* keys" — the feature
-commercial vendors sell as custom/enterprise attestation.
+verify "this credential was created on one of *our* keys" (the CTAP 2.1
+enterprise-attestation feature).
 
 ```sh
 # generate an org attestation CA + leaf however your PKI does it, then:

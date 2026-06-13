@@ -2,8 +2,7 @@
 
 A tamper-evident, on-device log of security events: boots, FIDO registrations
 and logins, factory resets, PIN set/change/lockouts, policy changes, seed
-backup and soft-lock activity. The kind of feature usually sold behind an
-"enterprise" paywall — here it is in the open tree.
+backup and soft-lock activity.
 
 ```sh
 rsk audit log              # export + print (add --pin if a PIN is set)
@@ -37,6 +36,14 @@ accumulator before its slot is reused — so evicted history stays attested in
 aggregate even though its details are gone. The chain head is
 `fold(epoch, window)`.
 
+```mermaid
+flowchart LR
+    e["new event"] --> chain["SHA-256 hash chain (window)"]
+    chain -->|ring full| fold["fold oldest into<br/>epoch accumulator"]
+    fold --> reuse["slot reused"]
+    chain --> head["chain head =<br/>fold(epoch, window)"]
+```
+
 `rsk audit verify` sends a fresh 16-byte challenge; the device signs
 `head ‖ seq_next ‖ challenge` with an ECDSA P-256 key derived from the
 **OTP DEVK** ([production.md](../production.md) stage 1) and returns the
@@ -54,7 +61,7 @@ newest event and never produces a false tamper verdict.
 window into the epoch and deletes the per-event details, then logs the
 `RESET`. A handed-over device therefore proves "N events happened, then a
 reset" without revealing where it had been used. The chain (and the
-checkpoint key) continue seamlessly across resets.
+checkpoint key) continue uninterrupted across resets.
 
 ## Gating
 

@@ -1,11 +1,18 @@
 # Interop — does it actually work with the real tools?
 
 RS-Key has three test layers below this one (`tests/`, the vendored
-[`third_party/`](../third_party/README.md) suites, and the host `cargo test`
-/ fuzz / Kani stack — see [testing.md](testing.md)). All of them drive the
-device at the **protocol** level: APDUs, CBOR, CTAPHID frames. They prove the
-wire format is correct against *our* reading of the specs and against two
-upstream suites.
+[`third_party/`](https://github.com/TheMaxMur/RS-Key/tree/main/third_party)
+suites, and the host `cargo test` / fuzz / Kani stack — see
+[testing.md](testing.md)). All of them drive the device at the **protocol**
+level: APDUs, CBOR, CTAPHID frames. They prove the wire format is correct
+against *our* reading of the specs and against two upstream suites.
+
+```mermaid
+flowchart BT
+    a["Host cargo test · fuzz · Kani<br/>(protocol logic)"] --> c
+    b["Vendored third_party suites<br/>(python-fido2, OpenPGP card)"] --> c
+    c["Interop — this page<br/>real gpg / ssh / ykman / browsers, on hardware"]
+```
 
 This document is the layer above: **does the device work end-to-end with the
 software a real user actually runs** — `gpg`, `ssh`, a browser's WebAuthn
@@ -14,6 +21,12 @@ conformance is necessary but not sufficient: a response can be spec-arguable
 yet still trip a strict third-party parser. (The canonical example is the
 `ykman openpgp info` crash below: our GET DATA `6E` was readable by `gpg` but
 rejected by ykman's stricter `Tlv.unpack(0x6E, …)`.)
+
+> This is experimental firmware with no security audit, and the cells below
+> only work because the default build uses a YubiKey USB identity so stock
+> tooling recognises the device (a local convenience — see
+> [build.md](build.md)). A ✅ means the cell was observed working on the dated
+> build; it is a record, not a guarantee of future builds or other hosts.
 
 The matrix is a living artifact. A cell is **evidence** only once it has been
 run on hardware and dated; everything else is `⏳ untested`. The `0758` /
@@ -163,6 +176,16 @@ send apdu: c=00 i=CA p1=00 p2=6E  le=256 em=0  ->  pcsc: insufficient buffer (0x
 # after (0x075A): chained per ISO 7816-4
 send apdu: c=00 i=CA p1=00 p2=6E  le=256 em=0  ->  response sw=610D datalen=256
 send apdu: c=00 i=C0 00 00 ...                 ->  response sw=9000 (remaining 13 B)
+```
+
+```mermaid
+sequenceDiagram
+    participant S as scdaemon
+    participant F as firmware
+    S->>F: 00 CA 00 6E  (short Le = 256)
+    F-->>S: 256 bytes + 61 0D  ("13 more")
+    S->>F: 00 C0 …  (GET RESPONSE)
+    F-->>S: 13 bytes + 9000
 ```
 
 ## How to run the CLI sweep

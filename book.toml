@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 RS-Key contributors
+#
+# mdBook config for the documentation site. The source is the existing docs/
+# tree (so the same files render on GitHub and on the site); the nav is
+# docs/SUMMARY.md. Mermaid diagrams are rendered by the mdbook-mermaid
+# preprocessor — run `mdbook-mermaid install .` once (it writes the gitignored
+# mermaid.min.js / mermaid-init.js) before `mdbook build`. scripts/docs.sh does
+# this for you.
+
+[book]
+title = "RS-Key"
+description = "Experimental open-source security-key firmware for the Raspberry Pi RP2350."
+authors = ["RS-Key contributors"]
+language = "en"
+src = "docs"
+
+[output.html]
+default-theme = "rust"
+preferred-dark-theme = "ayu"
+site-url = "/RS-Key/"
+git-repository-url = "https://github.com/TheMaxMur/RS-Key"
+edit-url-template = "https://github.com/TheMaxMur/RS-Key/edit/main/{path}"
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
+
+[output.html.fold]
+enable = true
+level = 1
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"

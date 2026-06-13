@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 RS-Key contributors
+
+# Builds the documentation site (mdBook + mdbook-mermaid) and publishes it to
+# GitHub Pages via the official Pages deployment flow (no manual gh-pages push).
+#
+# One-time repo setup: Settings -> Pages -> Build and deployment -> Source =
+# "GitHub Actions". The built site is never committed to the repo.
+
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "book.toml"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one in-flight Pages deployment; don't cancel a running one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v16
+
+      - uses: nix-community/cache-nix-action@v6
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+
+      - uses: actions/configure-pages@v5
+
+      # mdbook + mdbook-mermaid only (not the firmware dev shell), pinned to the
+      # flake's nixpkgs via --inputs-from so the versions match the dev shell.
+      - name: Build the book
+        run: |
+          nix shell --inputs-from . nixpkgs#mdbook nixpkgs#mdbook-mermaid -c bash -c '
+            mdbook-mermaid install .
+            mdbook build
+          '
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: book
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

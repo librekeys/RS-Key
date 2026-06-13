@@ -52,9 +52,8 @@ Point by point, without emotion:
 - There is exactly one way to get the firmware: through the companion app,
   under a [per-device license](https://www.picokeys.com/picokeyapp/) — €29.49
   for a single key, €49.49 for "Primary + Backup". A firmware license for a
-  five-dollar board, priced like an entire entry-level YubiKey — except the
-  YubiKey comes with a secure element, audits, and a vendor with a reputation
-  to lose.
+  five-dollar board, priced in the range of an entry-level commercial key
+  (which at least ships with a secure element and audits behind it).
 
 I am not arguing the maintainer has no right to earn money — he does; it is
 his code and his time. But a security key is a special case. The only thing
@@ -80,8 +79,10 @@ NDA. That is the right side of this story, and RS-Key intends to stay on it.
 ## What RS-Key does differently
 
 - **AGPL-3.0-only, irreversibly.** RS-Key is a derivative work of the
-  AGPL-licensed pico-keys (see [NOTICE](../NOTICE)), so the "relicense it
-  proprietary" trick is legally impossible here — for anyone, me included.
+  AGPL-licensed pico-keys (see
+  [NOTICE](https://github.com/TheMaxMur/RS-Key/blob/main/NOTICE)), so the
+  "relicense it proprietary" trick is legally impossible here — for anyone, me
+  included.
   There is no CLA; contributors keep their copyright. That is not a promise of
   good behaviour; it is how the licensing is built.
 - **Post-quantum in the open tree.** ML-DSA-44 credentials work today, for
@@ -89,13 +90,15 @@ NDA. That is the right side of this story, and RS-Key intends to stay on it.
 - **The "enterprise" features live in the public tree.** Attestation, secure
   boot, backup, audit — the things usually kept behind a paywall land in the
   open repository.
-- **Transparency as artifacts, not as a slogan.** Every parser is fuzzed,
-  every `unsafe` is documented and justified, and the threat model was written
-  down before anyone is asked to trust the key with something real.
+- **Transparency as artifacts, not as a slogan.** Every external-facing parser
+  has a fuzz target, every `unsafe` is documented and justified, and the threat
+  model was written down before anyone is asked to trust the key with something
+  real.
 - **Accessibility.** A Trezor or a Nitrokey is hard and expensive to get in
   Russia. An RP2350 board is 500 rubles and a friend with a 3D printer.
 
 And yes — this is still a love letter to writing real systems software in
 Rust on a ten-dollar board. Only now it comes with a moral: the openness of a
 security project is tested not by years of honest work, but by a single
-commit. RS-Key is built so that, here, that commit cannot happen.
+commit. RS-Key is built so that the relicensing in that commit cannot happen
+here.

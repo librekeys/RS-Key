@@ -3,11 +3,34 @@
 The firmware is `no_std` Rust; safety of the parsers and applet logic is the
 core defensive property, so every `unsafe` is enumerated here with its
 justification, why a safe alternative does not work, and how the risk is
-contained. Adding a new `unsafe` requires updating this page.
+contained. Adding a new `unsafe` requires updating this page. (Safe Rust rules
+out memory-corruption bugs in this code; it is not a security audit — see the
+[threat model](threat-model.md).)
 
 **Runtime sites: 9** — three concerns in the firmware proper (the interrupt
 handler pair counted honestly as two), two for the per-core prime sieves, one
 in the RSA assembly FFI, two in the standalone flash-wipe tool.
+
+```mermaid
+flowchart TB
+    subgraph fw["firmware/src/main.rs"]
+      a["interrupt executor (×2)"]
+      b["Send for SendUsb"]
+      c["heap init"]
+    end
+    subgraph kg["firmware/src/core1.rs"]
+      d["per-core prime sieves (×2)"]
+    end
+    subgraph asm["rsk-rsa-asm"]
+      e["modexp FFI"]
+    end
+    subgraph wipe["rsk-wipe"]
+      f["raw flash erase/program (×2)"]
+    end
+```
+
+The `unsafe` lives only in plumbing — none of it is in a parser, applet, crypto
+wrapper, or the filesystem.
 
 ## Firmware (`firmware/src/main.rs`)
 
