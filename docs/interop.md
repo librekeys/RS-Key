@@ -99,7 +99,7 @@ accordingly:
 | Consumer | What it exercises | Build | How | Status |
 |---|---|---|---|---|
 | `ykman oath accounts list` | OATH credential listing | no-touch | `tests/interop/run.py` | ✅ `0759` |
-| Yubico Authenticator (app) | TOTP/HOTP GUI | no-touch | manual | ⏳ |
+| Yubico Authenticator (app) | TOTP/HOTP GUI | no-touch | manual (desktop app) | ✅ `075A` (detects the key + all 6 apps [OTP/PIV/OATH/OpenPGP/U2F/FIDO2]; OATH add → calculate → delete all work in-GUI; the displayed TOTP `111429` then `629022` **cryptographically matched** an independent software HMAC-SHA1 TOTP of the same secret/window, `2026-06-13`) |
 | `ykman otp info` | OTP slot state | no-touch | `tests/interop/run.py` | ✅ `0759` |
 | OTP keyboard (types the code) | USB-HID keyboard emulation | touch | manual (focus a text field) | ✅ `0759` (short-tap typed the static slot verbatim, `2026-06-13`) |
 
