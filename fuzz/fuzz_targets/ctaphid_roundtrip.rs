@@ -7,7 +7,7 @@
 //! by `TxFrames` must reassemble back to the same bytes, command and channel.
 
 use libfuzzer_sys::fuzz_target;
-use rsk_usb::ctaphid::{Outcome, Reassembler, TxFrames, CTAP_MAX_MESSAGE};
+use rsk_usb::ctaphid::{CTAP_MAX_MESSAGE, Outcome, Reassembler, TxFrames};
 
 const CID: u32 = 0x0100_0000;
 const CMD: u8 = 0x80 | 0x01; // CTAPHID_PING (TYPE_INIT bit set)

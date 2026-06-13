@@ -9,14 +9,14 @@
 //! always stay within the output buffer.
 
 use libfuzzer_sys::fuzz_target;
-use rsk_crypto::{sha256, Device};
-use rsk_fido::credential::{credential_create, credential_store, CredExt, CredInput};
+use rsk_crypto::{Device, sha256};
+use rsk_fido::credential::{CredExt, CredInput, credential_create, credential_store};
 use rsk_fido::credmgmt::cred_mgmt;
 use rsk_fido::seed::{ensure_seed, load_keydev};
 use rsk_fido::state::PERM_CM;
 use rsk_fido::{Ctx, FidoState, Rng};
-use rsk_fs::storage::ram::RamStorage;
 use rsk_fs::Fs;
+use rsk_fs::storage::ram::RamStorage;
 
 struct SeqRng(u64);
 impl Rng for SeqRng {
@@ -49,7 +49,7 @@ fuzz_target!(|data: &[u8]| {
             use_sign_count: true,
             rk: true,
             created_ms: 1,
-            alg: -7, // ES256
+            alg: -7,  // ES256
             curve: 1, // P-256
             ext: CredExt {
                 cred_protect: 0,
@@ -60,9 +60,18 @@ fuzz_target!(|data: &[u8]| {
             },
         };
         let mut cred_box = [0u8; 512];
-        if let Ok(len) = credential_create(&seed, &dev, &input, &rp_hash, &[0x11; 12], &mut cred_box)
+        if let Ok(len) =
+            credential_create(&seed, &dev, &input, &rp_hash, &[0x11; 12], &mut cred_box)
         {
-            let _ = credential_store(&seed, &dev, &mut fs, &cred_box[..len], &rp_hash, "a.co", &[1, 2]);
+            let _ = credential_store(
+                &seed,
+                &dev,
+                &mut fs,
+                &cred_box[..len],
+                &rp_hash,
+                "a.co",
+                &[1, 2],
+            );
         }
     }
 

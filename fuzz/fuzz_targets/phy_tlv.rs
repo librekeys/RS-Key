@@ -10,7 +10,7 @@
 //! parsed value).
 
 use libfuzzer_sys::fuzz_target;
-use rsk_rescue::phy::{PhyData, PHY_MAX_SIZE};
+use rsk_rescue::phy::{PHY_MAX_SIZE, PhyData};
 
 fuzz_target!(|data: &[u8]| {
     let phy = PhyData::parse(data);

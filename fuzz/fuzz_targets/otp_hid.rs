@@ -9,7 +9,7 @@
 //! through [`FrameTx`]. None of the reassembly / framing may panic.
 
 use libfuzzer_sys::fuzz_target;
-use rsk_otp::hid::{FrameRx, FrameTx, RxOutcome, REPORT_SIZE};
+use rsk_otp::hid::{FrameRx, FrameTx, REPORT_SIZE, RxOutcome};
 
 fuzz_target!(|data: &[u8]| {
     let mut rx = FrameRx::new();

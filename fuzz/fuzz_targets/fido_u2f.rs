@@ -8,9 +8,9 @@
 
 use libfuzzer_sys::fuzz_target;
 use rsk_crypto::Device;
-use rsk_fido::{seed::ensure_seed, Ctx, Rng};
-use rsk_fs::storage::ram::RamStorage;
+use rsk_fido::{Ctx, Rng, seed::ensure_seed};
 use rsk_fs::Fs;
+use rsk_fs::storage::ram::RamStorage;
 use rsk_sdk::apdu::Apdu;
 
 struct SeqRng(u64);

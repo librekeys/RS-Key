@@ -14,8 +14,8 @@ use rsk_fido::largeblobs::large_blobs;
 use rsk_fido::seed::ensure_seed;
 use rsk_fido::state::PERM_LBW;
 use rsk_fido::{Ctx, FidoState, Rng};
-use rsk_fs::storage::ram::RamStorage;
 use rsk_fs::Fs;
+use rsk_fs::storage::ram::RamStorage;
 
 struct SeqRng(u64);
 impl Rng for SeqRng {

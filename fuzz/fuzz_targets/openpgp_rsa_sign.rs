@@ -13,7 +13,7 @@
 //! of `openpgp_apdu`.
 
 use libfuzzer_sys::fuzz_target;
-use rsk_openpgp::keys::{rsa_sign_em, MAX_RSA_DIGESTINFO};
+use rsk_openpgp::keys::{MAX_RSA_DIGESTINFO, rsa_sign_em};
 
 fuzz_target!(|data: &[u8]| {
     let mut em = [0u8; MAX_RSA_DIGESTINFO];

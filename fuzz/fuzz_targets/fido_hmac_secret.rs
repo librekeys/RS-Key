@@ -9,8 +9,8 @@
 //! (most inputs fail the ECDH, MAC or salt-length checks and return an error).
 
 use libfuzzer_sys::fuzz_target;
-use rsk_fido::hmacsecret;
 use rsk_fido::Rng;
+use rsk_fido::hmacsecret;
 
 struct SeqRng(u64);
 impl Rng for SeqRng {

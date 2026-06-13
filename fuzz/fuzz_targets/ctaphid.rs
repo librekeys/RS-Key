@@ -8,7 +8,7 @@
 //! must keep its buffer invariants.
 
 use libfuzzer_sys::fuzz_target;
-use rsk_usb::ctaphid::{Outcome, Reassembler, CTAP_MAX_MESSAGE, HID_RPT_SIZE};
+use rsk_usb::ctaphid::{CTAP_MAX_MESSAGE, HID_RPT_SIZE, Outcome, Reassembler};
 
 fuzz_target!(|data: &[u8]| {
     let mut asm = Reassembler::new();

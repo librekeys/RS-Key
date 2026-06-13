@@ -11,7 +11,7 @@
 use libfuzzer_sys::fuzz_target;
 use rsk_crypto::mldsa::{MLDSA44_PK_LEN, MLDSA44_SIG_LEN};
 use rsk_crypto::mlkem::{MLKEM768_CT_LEN, MLKEM768_EK_LEN, MLKEM768_SEED_LEN};
-use rsk_crypto::{mldsa44_verify, mlkem768_encapsulate, MlKem768Pair};
+use rsk_crypto::{MlKem768Pair, mldsa44_verify, mlkem768_encapsulate};
 
 fuzz_target!(|data: &[u8]| {
     let mut pk = [0u8; MLDSA44_PK_LEN];
@@ -28,7 +28,10 @@ fuzz_target!(|data: &[u8]| {
         // inputs still differentiate them.
         let (dst, salt) = (dst, chunk);
         for (i, b) in dst.iter_mut().enumerate() {
-            *b = data.get((i + salt) % data.len().max(1)).copied().unwrap_or(salt as u8);
+            *b = data
+                .get((i + salt) % data.len().max(1))
+                .copied()
+                .unwrap_or(salt as u8);
         }
     }
 

@@ -16,8 +16,8 @@
 use core::cell::RefCell;
 
 use libfuzzer_sys::fuzz_target;
-use rsk_fs::storage::ram::RamStorage;
 use rsk_fs::Fs;
+use rsk_fs::storage::ram::RamStorage;
 use rsk_piv::{AlwaysConfirm, PivApplet, Rng};
 use rsk_sdk::{Apdu, Applet, ResBuf};
 
@@ -52,7 +52,11 @@ fn run(app: &mut PivApplet, fs: &mut Fs<RamStorage>, raw: &[u8]) -> Vec<u8> {
 fn auth_mgm(app: &mut PivApplet, fs: &mut Fs<RamStorage>) {
     use aes::cipher::generic_array::GenericArray;
     use aes::cipher::{BlockDecrypt, KeyInit};
-    let wit = run(app, fs, &[0x00, 0x87, 0x0A, 0x9B, 0x04, 0x7C, 0x02, 0x80, 0x00]);
+    let wit = run(
+        app,
+        fs,
+        &[0x00, 0x87, 0x0A, 0x9B, 0x04, 0x7C, 0x02, 0x80, 0x00],
+    );
     if wit.len() < 20 {
         return;
     }

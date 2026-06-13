@@ -17,25 +17,25 @@
 // Filter to a single target: add `-- miri_apdu`
 // =========================================================================
 
-use rsk_crypto::{base64url, chachapoly, sha256, Device, HmacDrbg, MlKem768Pair};
-use rsk_crypto::{kdf::PinKdf, pinproto, mldsa44_verify, mlkem768_encapsulate};
-use rsk_fido::credential::{credential_create, credential_load, CredExt, CredInput};
+use rsk_crypto::{Device, HmacDrbg, MlKem768Pair, base64url, chachapoly, sha256};
+use rsk_crypto::{kdf::PinKdf, mldsa44_verify, mlkem768_encapsulate, pinproto};
+use rsk_fido::credential::{CredExt, CredInput, credential_create, credential_load};
 use rsk_fido::hmacsecret;
 use rsk_fido::seed::{ensure_seed, load_keydev};
 use rsk_fido::{Ctx, FidoState, Rng};
-use rsk_fs::storage::ram::RamStorage;
 use rsk_fs::Fs;
+use rsk_fs::storage::ram::RamStorage;
 use rsk_openpgp::consts::{PW1_DEFAULT, PW1_MODE81, PW1_MODE82, PW3_DEFAULT, PW3_MODE83};
-use rsk_openpgp::keys::{curve_from_attr, rsa_sign_em, Curve, PrivKey, MAX_RSA_DIGESTINFO};
+use rsk_openpgp::keys::{Curve, MAX_RSA_DIGESTINFO, PrivKey, curve_from_attr, rsa_sign_em};
 use rsk_openpgp::pso::parse_ecdh_point;
-use rsk_openpgp::{scan_files, OpenpgpApplet};
-use rsk_otp::hid::{FrameRx, FrameTx, RxOutcome, REPORT_SIZE};
-use rsk_rescue::phy::{PhyData, PHY_MAX_SIZE};
+use rsk_openpgp::{OpenpgpApplet, scan_files};
+use rsk_otp::hid::{FrameRx, FrameTx, REPORT_SIZE, RxOutcome};
+use rsk_rescue::phy::{PHY_MAX_SIZE, PhyData};
 use rsk_sdk::apdu::Apdu;
-use rsk_sdk::tlv::{find_tag, Tlv};
+use rsk_sdk::tlv::{Tlv, find_tag};
 use rsk_sdk::{Applet, ResBuf};
-use rsk_usb::ctaphid::{Outcome, Reassembler, TxFrames, CTAP_MAX_MESSAGE, HID_RPT_SIZE};
 use rsk_usb::ccid::process_message;
+use rsk_usb::ctaphid::{CTAP_MAX_MESSAGE, HID_RPT_SIZE, Outcome, Reassembler, TxFrames};
 
 use core::cell::RefCell;
 
@@ -206,7 +206,13 @@ fn miri_ctaphid() {
 fn miri_ctaphid_roundtrip() {
     const CID: u32 = 0x0100_0000;
     const CMD: u8 = 0x80 | 0x01;
-    for data in [&b""[..], b"\x00", b"\x01\x02\x03", &[0x55; 256], &[0x55; 1000]] {
+    for data in [
+        &b""[..],
+        b"\x00",
+        b"\x01\x02\x03",
+        &[0x55; 256],
+        &[0x55; 1000],
+    ] {
         if data.len() > CTAP_MAX_MESSAGE {
             continue;
         }
@@ -278,7 +284,9 @@ fn miri_aes_gcm() {
         bad[0] ^= 0xff;
         let mut dec2 = [0u8; 128];
         dec2[..n].copy_from_slice(&buf[..n]);
-        assert!(rsk_crypto::aes::aes256gcm_decrypt(&key, &nonce, aad, &mut dec2[..n], &bad).is_err());
+        assert!(
+            rsk_crypto::aes::aes256gcm_decrypt(&key, &nonce, aad, &mut dec2[..n], &bad).is_err()
+        );
     }
 }
 
@@ -514,7 +522,13 @@ fn miri_fido_credmgmt() {
                 credential_create(&seed, &d, &input, &rp_hash, &[0x11; 12], &mut cred_box)
             {
                 let _ = credential_store(
-                    &seed, &d, &mut fs, &cred_box[..len], &rp_hash, "a.co", &[1, 2],
+                    &seed,
+                    &d,
+                    &mut fs,
+                    &cred_box[..len],
+                    &rp_hash,
+                    "a.co",
+                    &[1, 2],
                 );
             }
         }
@@ -548,7 +562,9 @@ fn miri_fido_u2f() {
         &b"\x00\x03\x00\x00\x00\x00\x00"[..], // version
         b"\x00\x01\x00\x00\x00\x40\x00\x00",  // register-like
     ] {
-        let Ok(apdu) = Apdu::parse(data) else { continue };
+        let Ok(apdu) = Apdu::parse(data) else {
+            continue;
+        };
         let d = dev();
         let mut fs = Fs::new(RamStorage::new(), &[]);
         let mut rng = SeqRng(1);
@@ -699,7 +715,13 @@ fn miri_openpgp_apdu() {
         (PW1_MODE81, PW1_DEFAULT),
         (PW1_MODE82, PW1_DEFAULT),
     ] {
-        let mut v = vec![0x00, rsk_openpgp::consts::INS_VERIFY, 0x00, mode, pin.len() as u8];
+        let mut v = vec![
+            0x00,
+            rsk_openpgp::consts::INS_VERIFY,
+            0x00,
+            mode,
+            pin.len() as u8,
+        ];
         v.extend_from_slice(pin);
         run(&mut app, &mut fs, &v);
     }
@@ -766,7 +788,13 @@ fn miri_openpgp_ecdh() {
 
 #[test]
 fn miri_openpgp_ec_key() {
-    const CURVES: [Curve; 5] = [Curve::P256, Curve::P384, Curve::P521, Curve::K256, Curve::Ed25519];
+    const CURVES: [Curve; 5] = [
+        Curve::P256,
+        Curve::P384,
+        Curve::P521,
+        Curve::K256,
+        Curve::Ed25519,
+    ];
 
     for data in [
         &b"\x00"[..],
@@ -837,7 +865,7 @@ fn miri_drbg() {
     for (seed, len) in [
         (&b""[..], 0usize),
         (b"\x01\x02\x03\x04\x05\x06\x07\x08", 32),
-        (b"\xff" , 16),
+        (b"\xff", 16),
         (&[0xAA; 64], 255),
     ] {
         let mut a = HmacDrbg::new(seed);
@@ -876,7 +904,10 @@ fn miri_pqc() {
             (&mut ct[..], 3),
         ] {
             for (i, b) in dst.iter_mut().enumerate() {
-                *b = data.get((i + chunk) % data.len().max(1)).copied().unwrap_or(chunk as u8);
+                *b = data
+                    .get((i + chunk) % data.len().max(1))
+                    .copied()
+                    .unwrap_or(chunk as u8);
             }
         }
 
@@ -1044,15 +1075,18 @@ fn miri_oath_apdu() {
     fs.scan();
     let rng = RefCell::new(CountRng(0));
     let touch = RefCell::new(rsk_oath::AlwaysConfirm);
-    let mut app =
-        OathApplet::new([1, 2, 3, 4, 5, 6, 7, 8], [0x22; 32], None, &rng, &touch);
+    let mut app = OathApplet::new([1, 2, 3, 4, 5, 6, 7, 8], [0x22; 32], None, &rng, &touch);
 
     // Seed one TOTP credential.
-    run(&mut app, &mut fs, &[
-        0x00, 0x01, 0, 0, 0x1E, 0x71, 0x04, b't', b'o', b't', b'p', 0x73, 0x16, 0x21, 6,
-        b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9', b'0', b'1', b'2', b'3', b'4',
-        b'5', b'6', b'7', b'8', b'9', b'0',
-    ]);
+    run(
+        &mut app,
+        &mut fs,
+        &[
+            0x00, 0x01, 0, 0, 0x1E, 0x71, 0x04, b't', b'o', b't', b'p', 0x73, 0x16, 0x21, 6, b'1',
+            b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9', b'0', b'1', b'2', b'3', b'4', b'5',
+            b'6', b'7', b'8', b'9', b'0',
+        ],
+    );
 
     for data in [
         &b"\x00\xa4\x04\x00"[..],
@@ -1111,7 +1145,10 @@ fn miri_otp_apdu() {
     put.extend_from_slice(&[0; 6]);
     run(&mut app, &mut fs, &put);
 
-    for data in [&b"\x00\xa4\x04\x00"[..], b"\x00\xa2\x02\x00\x08\x01\x02\x03\x04\x05\x06\x07\x08"] {
+    for data in [
+        &b"\x00\xa4\x04\x00"[..],
+        b"\x00\xa2\x02\x00\x08\x01\x02\x03\x04\x05\x06\x07\x08",
+    ] {
         run(&mut app, &mut fs, data);
     }
 }
@@ -1178,7 +1215,11 @@ fn miri_piv_apdu() {
     fn auth_mgm(app: &mut PivApplet, fs: &mut Fs<RamStorage>) {
         use aes::cipher::generic_array::GenericArray;
         use aes::cipher::{BlockDecrypt, KeyInit};
-        let wit = run(app, fs, &[0x00, 0x87, 0x0A, 0x9B, 0x04, 0x7C, 0x02, 0x80, 0x00]);
+        let wit = run(
+            app,
+            fs,
+            &[0x00, 0x87, 0x0A, 0x9B, 0x04, 0x7C, 0x02, 0x80, 0x00],
+        );
         if wit.len() < 20 {
             return;
         }
@@ -1227,7 +1268,7 @@ fn miri_piv_apdu() {
 
 #[test]
 fn miri_rescue_apdu() {
-    use rsk_rescue::rollback::{RollbackRaw, ROLLBACK_REQUIRED_BIT};
+    use rsk_rescue::rollback::{ROLLBACK_REQUIRED_BIT, RollbackRaw};
     use rsk_rescue::{Platform, RescueApplet, SecureBootStatus};
 
     const SERIAL_ID: [u8; 8] = [0xAA, 0xBB, 0xCC, 0xDD, 5, 6, 7, 8];

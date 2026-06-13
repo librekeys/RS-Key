@@ -13,8 +13,8 @@
 use core::cell::RefCell;
 
 use libfuzzer_sys::fuzz_target;
-use rsk_fs::storage::ram::RamStorage;
 use rsk_fs::Fs;
+use rsk_fs::storage::ram::RamStorage;
 use rsk_oath::{OathApplet, Rng};
 use rsk_sdk::{Apdu, Applet, ResBuf};
 

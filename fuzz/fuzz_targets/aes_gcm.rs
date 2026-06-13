@@ -34,7 +34,8 @@ fuzz_target!(|data: &[u8]| {
     // Round-trip must recover the plaintext.
     let mut dec = [0u8; 2048];
     dec[..n].copy_from_slice(&buf[..n]);
-    aes::aes256gcm_decrypt(&key, &nonce, aad, &mut dec[..n], &tag).expect("round-trip authenticates");
+    aes::aes256gcm_decrypt(&key, &nonce, aad, &mut dec[..n], &tag)
+        .expect("round-trip authenticates");
     assert_eq!(&dec[..n], &msg[..n]);
 
     // A flipped tag must be rejected, never panic.

@@ -15,7 +15,7 @@
 //! match. Neither path may panic.
 
 use libfuzzer_sys::fuzz_target;
-use rsk_openpgp::keys::{curve_from_attr, Curve, PrivKey};
+use rsk_openpgp::keys::{Curve, PrivKey, curve_from_attr};
 
 const CURVES: [Curve; 5] = [
     Curve::P256,

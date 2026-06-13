@@ -7,7 +7,7 @@
 //! never panic or read out of bounds.
 
 use libfuzzer_sys::fuzz_target;
-use rsk_sdk::tlv::{find_tag, Tlv};
+use rsk_sdk::tlv::{Tlv, find_tag};
 
 fuzz_target!(|data: &[u8]| {
     for (_tag, _value) in Tlv::new(data) {}

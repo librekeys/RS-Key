@@ -10,8 +10,8 @@
 //! APDUs is replayed against the live applet + flash; none may panic.
 
 use libfuzzer_sys::fuzz_target;
-use rsk_fs::storage::ram::RamStorage;
 use rsk_fs::Fs;
+use rsk_fs::storage::ram::RamStorage;
 use rsk_mgmt::ManagementApplet;
 use rsk_sdk::{Apdu, Applet, ResBuf};
 

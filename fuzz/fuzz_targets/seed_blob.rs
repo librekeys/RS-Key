@@ -14,8 +14,8 @@ use libfuzzer_sys::fuzz_target;
 
 use rsk_crypto::Device;
 use rsk_fido::seed::{load_keydev, migrate_keydev_boot, migrate_keydev_pin};
-use rsk_fs::storage::ram::RamStorage;
 use rsk_fs::Fs;
+use rsk_fs::storage::ram::RamStorage;
 
 const EF_KEY_DEV: u16 = 0xCC00;
 const OTP: [u8; 32] = [0x5A; 32];

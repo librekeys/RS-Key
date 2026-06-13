@@ -13,12 +13,12 @@ use libfuzzer_sys::fuzz_target;
 use rsk_crypto::Device;
 use rsk_fido::consts::EF_KEY_DEV;
 use rsk_fido::{
+    Ctx, Rng,
     seed::{ensure_seed, seal_seed_locked},
     vendor::vendor,
-    Ctx, Rng,
 };
-use rsk_fs::storage::ram::RamStorage;
 use rsk_fs::Fs;
+use rsk_fs::storage::ram::RamStorage;
 
 struct SeqRng(u64);
 impl Rng for SeqRng {

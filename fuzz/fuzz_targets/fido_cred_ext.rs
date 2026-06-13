@@ -9,9 +9,9 @@
 //! credBlob is sealed only when shorter than `MAX_CREDBLOB_LENGTH`).
 
 use libfuzzer_sys::fuzz_target;
-use rsk_crypto::{sha256, Device};
+use rsk_crypto::{Device, sha256};
 use rsk_fido::consts::MAX_CREDBLOB_LENGTH;
-use rsk_fido::credential::{credential_create, credential_load, CredExt, CredInput};
+use rsk_fido::credential::{CredExt, CredInput, credential_create, credential_load};
 
 fuzz_target!(|data: &[u8]| {
     let dev = Device {
@@ -41,7 +41,7 @@ fuzz_target!(|data: &[u8]| {
         use_sign_count: true,
         rk: false,
         created_ms: 0,
-        alg: -7, // ES256
+        alg: -7,  // ES256
         curve: 1, // P-256
         ext,
     };

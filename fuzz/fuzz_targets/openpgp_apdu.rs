@@ -15,10 +15,12 @@ use core::cell::RefCell;
 
 use libfuzzer_sys::fuzz_target;
 use rsk_crypto::Device;
-use rsk_fs::storage::ram::RamStorage;
 use rsk_fs::Fs;
-use rsk_openpgp::consts::{INS_VERIFY, PW1_DEFAULT, PW1_MODE81, PW1_MODE82, PW3_DEFAULT, PW3_MODE83};
-use rsk_openpgp::{scan_files, OpenpgpApplet, Rng};
+use rsk_fs::storage::ram::RamStorage;
+use rsk_openpgp::consts::{
+    INS_VERIFY, PW1_DEFAULT, PW1_MODE81, PW1_MODE82, PW3_DEFAULT, PW3_MODE83,
+};
+use rsk_openpgp::{OpenpgpApplet, Rng, scan_files};
 use rsk_sdk::{Apdu, Applet, ResBuf};
 
 const SERIAL_ID: [u8; 8] = [0xAA, 0xBB, 0xCC, 0xDD, 5, 6, 7, 8];

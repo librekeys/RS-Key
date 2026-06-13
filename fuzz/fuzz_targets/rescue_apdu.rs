@@ -13,9 +13,9 @@
 use core::cell::RefCell;
 
 use libfuzzer_sys::fuzz_target;
-use rsk_fs::storage::ram::RamStorage;
 use rsk_fs::Fs;
-use rsk_rescue::rollback::{RollbackRaw, ROLLBACK_REQUIRED_BIT};
+use rsk_fs::storage::ram::RamStorage;
+use rsk_rescue::rollback::{ROLLBACK_REQUIRED_BIT, RollbackRaw};
 use rsk_rescue::{Platform, RescueApplet, Rng, SecureBootStatus};
 use rsk_sdk::{Apdu, Applet, ResBuf};
 
@@ -39,7 +39,11 @@ struct FakePlatform {
 impl Platform for FakePlatform {
     fn secure_boot_status(&self) -> SecureBootStatus {
         // enabled: true keeps the rollback-require arm's deepest path fuzzable.
-        SecureBootStatus { enabled: true, locked: false, bootkey: 0 }
+        SecureBootStatus {
+            enabled: true,
+            locked: false,
+            bootkey: 0,
+        }
     }
     fn now(&self) -> Option<u32> {
         self.time
@@ -73,7 +77,10 @@ fuzz_target!(|data: &[u8]| {
     let mut fs = Fs::new(RamStorage::new(), &[]);
     fs.scan();
     let rng = RefCell::new(CountRng(0));
-    let platform = RefCell::new(FakePlatform { time: None, flags0: [0; 3] });
+    let platform = RefCell::new(FakePlatform {
+        time: None,
+        flags0: [0; 3],
+    });
     let mut app = RescueApplet::new(
         SERIAL_ID,
         SERIAL_HASH,
