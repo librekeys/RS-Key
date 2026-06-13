@@ -90,3 +90,7 @@ survive.
   `gpgconf --kill scdaemon`.
 - `ykman` stops seeing the device after gpg used it → same fix.
 - Wrong-PIN counters: `gpg --card-status` shows `PIN retry counter: 3 0 3`.
+- `ykman openpgp info` → `ERROR: Incorrect TLV length` on firmware **before
+  `0x0759`**: the GET DATA `6E` reply was missing its constructed-DO wrapper,
+  which ykman's strict parser requires (`gpg` tolerated it). Fixed in `0x0759`;
+  flash it and re-run. See [interop.md](../interop.md#known-issues).

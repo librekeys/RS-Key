@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 RS-Key contributors
 
-//! GET DATA / GET NEXT DATA: build the DO ([`DoWriter`]) and, for a non-flash
-//! DO whose whole response is a single TLV, strip the outer tag+length —
-//! returning the bare value, as `gpg`/`opensc` expect.
+//! GET DATA / GET NEXT DATA: build the DO ([`DoWriter`]) and, for a PRIMITIVE
+//! non-flash DO whose whole response is a single TLV, strip the outer
+//! tag+length — returning the bare value, as `gpg`/`opensc` expect. A
+//! CONSTRUCTED template DO (6E/65/73/7A/FA) keeps its tag+length: real
+//! OpenPGP cards return it wrapped, `gpg` tolerates it, and ykman/yubikit
+//! REQUIRE it (`ApplicationRelatedData.parse` does `Tlv.unpack(0x6E, …)`).
 
 use rsk_fs::{Fs, Storage};
 use rsk_sdk::Sw;
@@ -75,7 +78,16 @@ pub fn get_data<S: Storage>(
         let mut w = DoWriter::new(out, fs, full_aid);
         w.build(fid)
     };
-    if !matches!(src, DoSource::Flash) {
+    // GET DATA returns a PRIMITIVE DO's bare value (gpg/opensc want the value,
+    // not its tag+length), but a CONSTRUCTED template DO keeps its outer
+    // tag+length. The BER constructed bit (0x20 on the first tag byte) is the
+    // discriminator: 6E/65/73/7A/FA all carry it, the primitives (4F/C1/C4/DE…)
+    // do not. Real cards wrap the templates, gpg tolerates either, but ykman's
+    // `ApplicationRelatedData.parse` does `Tlv.unpack(0x6E, response)` and an
+    // unwrapped `4F …` makes `ykman openpgp info` fail (`Incorrect TLV
+    // length`, reproduced live on 0x0755). Flash DOs are raw stored values and
+    // carry no wrapper to strip.
+    if !matches!(src, DoSource::Flash) && data_len > 0 && out[0] & 0x20 == 0 {
         let dec = outer_tlv_header(&out[..data_len]);
         if dec > 0 {
             out.copy_within(dec..data_len, 0);
@@ -161,18 +173,41 @@ mod tests {
     }
 
     #[test]
-    fn app_data_strips_6e_wrapper() {
+    fn app_data_keeps_6e_wrapper_for_ykman() {
         let mut fs = fs();
         let a = aid();
         let mut out = [0u8; 512];
         let mut cur = None;
         let (n, sw) = get_data(EF_APP_DATA, false, false, &mut fs, &a, &mut cur, &mut out);
         assert_eq!(sw, Sw::OK);
-        // The 6E 82 LL LL wrapper is gone; the first nested DO (4F full AID) leads.
-        assert_eq!(out[0], 0x4F);
-        assert_eq!(out[1], 16);
-        assert_eq!(&out[2..8], OPENPGP_AID);
-        assert!(n > 16);
+        // The constructed 6E template keeps its tag+length — this is exactly
+        // what yubikit's `Tlv.unpack(0x6E, response)` consumes. An unwrapped
+        // `4F …` here made `ykman openpgp info` raise ValueError.
+        assert_eq!(out[0], 0x6E);
+        assert_eq!(out[1], 0x82);
+        let nested = ((out[2] as usize) << 8) | out[3] as usize;
+        assert_eq!(n, nested + 4); // the whole response is one well-formed TLV
+        // First nested DO is the full AID (4F 10 …).
+        assert_eq!(out[4], 0x4F);
+        assert_eq!(out[5], 16);
+        assert_eq!(&out[6..12], OPENPGP_AID);
+    }
+
+    #[test]
+    fn cardholder_data_keeps_65_wrapper() {
+        // 0x65 is another constructed template ykman unpacks by tag
+        // (`Tlv.unpack(0x65, …)`); it must keep its wrapper even when the nested
+        // name/lang/sex DOs are empty.
+        let mut fs = fs();
+        let a = aid();
+        let mut out = [0u8; 128];
+        let mut cur = None;
+        let (n, sw) = get_data(EF_CH_DATA, false, false, &mut fs, &a, &mut cur, &mut out);
+        assert_eq!(sw, Sw::OK);
+        assert_eq!(out[0], 0x65);
+        assert_eq!(out[1], 0x82);
+        let nested = ((out[2] as usize) << 8) | out[3] as usize;
+        assert_eq!(n, nested + 4);
     }
 
     #[test]

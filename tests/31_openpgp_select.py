@@ -86,6 +86,11 @@ def main():
     app = expect_ok(conn, get_data(0x006E), "GET DATA 6E (app data)")
     if not app:
         fail("application related data (6E) is empty")
+    # The constructed 6E template must keep its outer 6E tag — ykman/yubikit
+    # parse it with `Tlv.unpack(0x6E, response)` and reject an unwrapped reply
+    # (an unwrapped `4F …` here is exactly what broke `ykman openpgp info`).
+    if app[0] != 0x6E:
+        fail(f"6E composite must keep its 6E tag (got {app[0]:02X}); ykman Tlv.unpack(0x6E) requires it")
     # The 4F (full AID) DO must be nested somewhere inside the 6E composite.
     if bytes(OPENPGP_AID) not in bytes(app):
         fail("6E composite does not contain the AID")
