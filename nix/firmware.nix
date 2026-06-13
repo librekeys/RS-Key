@@ -177,6 +177,40 @@ in
         "advertise-pqc"
       ];
     };
+    # The remaining feature combinations, so all 8 release flavors
+    # (up-button x advertise-pqc x fips-profile) build reproducibly via nix —
+    # the same matrix the CI `flavors` job covers.
+    firmware-fips-pqc = mkFirmware {
+      name = "firmware-fips-pqc";
+      cargoFlags = [
+        "--features"
+        "fips-profile,advertise-pqc"
+      ];
+    };
+    firmware-no-touch-pqc = mkFirmware {
+      name = "firmware-no-touch-pqc";
+      cargoFlags = [
+        "--no-default-features"
+        "--features"
+        "advertise-pqc"
+      ];
+    };
+    firmware-no-touch-fips = mkFirmware {
+      name = "firmware-no-touch-fips";
+      cargoFlags = [
+        "--no-default-features"
+        "--features"
+        "fips-profile"
+      ];
+    };
+    firmware-no-touch-fips-pqc = mkFirmware {
+      name = "firmware-no-touch-fips-pqc";
+      cargoFlags = [
+        "--no-default-features"
+        "--features"
+        "fips-profile,advertise-pqc"
+      ];
+    };
     # Worked example of a declarative identity preset — copy this and tweak the
     # knobs for your own pinned config (vidpid / fwVersion / usbVid …).
     firmware-pico = mkFirmware {

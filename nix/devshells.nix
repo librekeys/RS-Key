@@ -31,6 +31,7 @@
       pkgs.gitleaks # secret detection (pre-commit hook over staged diff)
       pkgs.cargo-audit # SCA: RustSec advisory scan of Cargo.lock
       pkgs.cargo-deny # SCA: advisories + licenses + source/ban policy
+      pkgs.cargo-cyclonedx # CycloneDX SBOM generation (release provenance)
 
       # Documentation site (see scripts/docs.sh): the GitHub Pages source is the
       # docs/ tree rendered by mdBook; mdbook-mermaid renders the diagrams; lychee

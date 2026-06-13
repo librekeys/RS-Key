@@ -10,6 +10,7 @@
 - [Quick start](quickstart.md)
 - [Hardware](hardware.md)
 - [Build options](build.md)
+- [Releases & verification](releases.md)
 - [Linux host setup](linux.md)
 
 # Using the device

@@ -1,0 +1,139 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 RS-Key contributors
+
+# Cut a release from a pushed `v*` tag: build the 8 firmware flavors
+# reproducibly via `nix build`, generate a CycloneDX SBOM, hash everything into
+# SHA256SUMS, sign that file with keyless cosign (sigstore/Fulcio via the job's
+# OIDC identity — no private key), and publish a GitHub Release with the lot.
+#
+# The .uf2 images are UNSIGNED for secure boot — the cosign signature attests
+# the build provenance, not the boot seal. On a secure-boot device, seal an
+# image with your own key before flashing (docs/production.md). Verifying a
+# download: docs/releases.md.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "tag to (re)build a release for, e.g. v0.1.0"
+        required: true
+
+permissions:
+  contents: write # create the release + upload assets
+  id-token: write # keyless cosign (OIDC token from Fulcio)
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: DeterminateSystems/nix-installer-action@v16
+
+      - uses: nix-community/cache-nix-action@v6
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'flake.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: resolve tag
+        id: tag
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: build the 8 reproducible firmware flavors
+        run: |
+          tag="${{ steps.tag.outputs.tag }}"
+          mkdir -p dist
+          for pkg in firmware firmware-pqc firmware-fips firmware-fips-pqc \
+                     firmware-no-touch firmware-no-touch-pqc \
+                     firmware-no-touch-fips firmware-no-touch-fips-pqc; do
+            echo "::group::nix build .#$pkg"
+            out="$(nix build ".#$pkg" --no-link --print-out-paths)"
+            label="${pkg#firmware}"; label="${label#-}"
+            [ -z "$label" ] && label="default"
+            cp "$out/$pkg.uf2" "dist/rs-key-${tag}-${label}.uf2"
+            echo "::endgroup::"
+          done
+          ls -l dist
+
+      - name: generate the CycloneDX SBOM
+        run: |
+          tag="${{ steps.tag.outputs.tag }}"
+          # Scoped to the firmware crate (the shipped artifact) and its build
+          # target; cargo-cyclonedx writes firmware/firmware.cdx.json (plus a
+          # per-crate file for every workspace member, which we ignore).
+          nix develop -c cargo cyclonedx \
+            --manifest-path firmware/Cargo.toml \
+            --target thumbv8m.main-none-eabihf \
+            --format json
+          sbom="firmware/firmware.cdx.json"
+          [ -f "$sbom" ] || sbom="$(ls firmware/*.cdx.json 2>/dev/null | head -1)"
+          if [ -z "$sbom" ] || [ ! -f "$sbom" ]; then echo "no SBOM produced" >&2; exit 1; fi
+          cp "$sbom" "dist/rs-key-${tag}-sbom.cdx.json"
+
+      - name: checksums
+        run: |
+          cd dist
+          sha256sum ./*.uf2 ./*.cdx.json > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: sign SHA256SUMS (keyless cosign)
+        env:
+          COSIGN_YES: "true"
+        run: |
+          cosign sign-blob \
+            --bundle dist/SHA256SUMS.cosign.bundle \
+            dist/SHA256SUMS
+
+      - name: extract release notes from CHANGELOG
+        run: |
+          ver="${{ steps.tag.outputs.version }}"
+          awk -v v="$ver" '
+            $0 ~ "^## \\[" v "\\]" { f = 1; print; next }
+            /^## \[/ { if (f) exit }
+            f { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "RS-Key ${{ steps.tag.outputs.tag }}" > release-notes.md
+          fi
+          {
+            echo
+            echo "---"
+            echo "Verify a download: https://github.com/${{ github.repository }}/blob/${{ steps.tag.outputs.tag }}/docs/releases.md"
+          } >> release-notes.md
+          cat release-notes.md
+
+      - name: create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.tag.outputs.tag }}"
+          gh release create "$tag" \
+            --title "RS-Key $tag" \
+            --notes-file release-notes.md \
+            dist/*
