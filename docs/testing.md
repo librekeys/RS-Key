@@ -196,4 +196,6 @@ upstream checkouts).
 `check.sh` is plain bash over the Nix dev shell — a CI job is
 `nix develop -c ./scripts/check.sh` plus, on a runner with the board
 attached, the `tests/` scripts. The scheduled `deep-checks` workflow is the
-Miri, fuzz and Kani commands from this page, weekly. No hidden state.
+Miri, fuzz and Kani commands from this page, weekly, plus a `repro` job
+that builds the hermetic firmware twice and requires bit-identical outputs
+([build.md](build.md#nix-build-hermetic-no-dev-shell)). No hidden state.

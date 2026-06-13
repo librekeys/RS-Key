@@ -65,11 +65,22 @@ nix build .#firmware                 # default touch image
 ls result/                           # firmware.elf  firmware.uf2
 ```
 
-`result/firmware.uf2` is the same image the dev-shell `cargo build` produces.
-Hermetic, but not yet bit-for-bit reproducible across machines — the build
-path leaks into panic-location strings baked in `.rodata`; cargo's `trim-paths`
-will close that once it stabilizes in the pinned toolchain. The flavors mirror
-the [CI matrix](../.github/workflows/ci.yml):
+`result/firmware.uf2` is functionally the image the dev-shell `cargo build`
+produces — and, unlike the dev-shell build, it is **bit-for-bit
+reproducible**: the derivation remaps the two absolute build inputs out of
+the binary (the per-build sandbox dir and the toolchain store path — both
+land in panic-location strings in `.rodata`, plus DWARF in the `.elf`) with
+stable `--remap-path-prefix`, so one `flake.lock` yields one `firmware.uf2`
+on every machine of a platform. The weekly `repro` job in
+[deep-checks](../.github/workflows/deep-checks.yml) proves it — `nix build`
+twice, the second with `--rebuild` so nix compares every output byte — and
+publishes the canonical sha256 in its run summary.
+
+To verify a published image: `nix build .#firmware` at the release commit
+and compare hashes. A *sealed* image can't be reproduced by a third party
+(the signature is the signer's); verify the unsigned payload instead, then
+check the seal with `picotool`. The flavors mirror the
+[CI matrix](../.github/workflows/ci.yml):
 
 | Attribute | Image |
 |---|---|

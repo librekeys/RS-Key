@@ -135,6 +135,12 @@ picotool seal --sign --hash firmware.uf2 firmware-signed.uf2 \
 # flash firmware-signed.uf2 (BOOTSEL, or: rsk reboot bootsel && cp)
 ```
 
+To seal an image others can independently verify, build it with
+`nix build .#firmware` instead of the dev-shell `cargo build` — that path is
+bit-for-bit reproducible from the source tree
+([build.md](build.md#nix-build-hermetic-no-dev-shell)), so anyone can rebuild
+at your release commit and confirm the payload you signed.
+
 ## Stage 3 — anti-rollback (optional)
 
 With secure boot on, the bootrom refuses *foreign* images — but every image

@@ -118,8 +118,18 @@ let
         ];
         buildPhase = ''
           runHook preBuild
+          # Reproducibility: panic-Location strings (and DWARF in the .elf)
+          # embed source paths, and two of them are absolute — the per-build
+          # sandbox dir (random suffix: every build would differ) and the
+          # toolchain store path (ties the bytes to one toolchain hash). Remap
+          # both. CLI --config merges with the repo .cargo/config.toml
+          # (rustflags arrays join); RUSTFLAGS env would *override* it and
+          # drop the link args. The target key must stay UNQUOTED so it lands
+          # on the same nested TOML key the repo config uses — a quoted
+          # "thumbv8m.main-none-eabihf" is a different key and merges nothing.
           cargo build --release --offline --frozen \
             -p firmware --target ${target} \
+            --config "target.${target}.rustflags=[\"--remap-path-prefix=$NIX_BUILD_TOP=/build\",\"--remap-path-prefix=${toolchain}=/toolchain\"]" \
             ${lib.escapeShellArgs cargoFlags}
           runHook postBuild
         '';

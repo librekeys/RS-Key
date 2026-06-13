@@ -11,6 +11,9 @@
 #   kani — the #[kani::proof] bounded model-checking harnesses (docs/
 #          testing.md). Kani is not in nixpkgs and its setup downloads a
 #          prebuilt CBMC bundle, so this one job is rustup-based, not nix.
+#   repro — `nix build .#firmware` twice (`--rebuild` diffs every output
+#          byte): proves the hermetic image is bit-reproducible and publishes
+#          the canonical sha256 for this flake.lock (docs/build.md).
 #
 # Runs weekly, on demand (workflow_dispatch, with a per-target time knob),
 # and self-tests on any push that edits this file. Local equivalents:
@@ -30,9 +33,11 @@ on:
         default: "120"
   push:
     branches: [main]
-    # The dev shell defines this workflow's runtime environment — self-test on
-    # changes to either.
-    paths: [".github/workflows/deep-checks.yml", "nix/devshells.nix"]
+    # The dev shell defines this workflow's runtime environment, and the
+    # firmware derivation is what the repro job proves deterministic —
+    # self-test on changes to any of them.
+    paths:
+      [".github/workflows/deep-checks.yml", "nix/devshells.nix", "nix/firmware.nix"]
 
 permissions:
   contents: read
@@ -168,3 +173,35 @@ jobs:
 
       - name: prove every harness
         run: cargo kani -p rsk-sdk -p rsk-fs -p rsk-rsa-asm -p rsk-crypto -p rsk-rescue
+
+  # The hermetic firmware build is bit-reproducible (docs/build.md): same
+  # flake.lock → same firmware.uf2, on every machine of one platform. Build,
+  # then `--rebuild` — nix re-runs the derivation and errors if any output
+  # byte differs. The published hash is what third parties compare against.
+  repro:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v16
+
+      - uses: nix-community/cache-nix-action@v6
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+
+      - name: build the firmware image
+        run: nix build .#firmware -o result-repro
+
+      - name: rebuild and require bit-identical outputs
+        run: nix build .#firmware --rebuild
+
+      - name: publish the reproducible hashes
+        run: |
+          {
+            echo "### Reproducible firmware (this flake.lock, x86_64-linux)"
+            echo '```'
+            (cd result-repro && sha256sum firmware.uf2 firmware.elf)
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
