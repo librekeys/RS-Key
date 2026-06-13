@@ -214,6 +214,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "mgmt_config"
+path = "fuzz_targets/mgmt_config.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "oath_apdu"
 path = "fuzz_targets/oath_apdu.rs"
 test = false

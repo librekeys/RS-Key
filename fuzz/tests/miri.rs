@@ -916,6 +916,35 @@ fn miri_mgmt_apdu() {
 }
 
 // =========================================================================
+// mgmt_config
+// =========================================================================
+
+#[test]
+fn miri_mgmt_config() {
+    use rsk_mgmt::ManagementApplet;
+
+    fn run(app: &mut ManagementApplet, fs: &mut Fs<RamStorage>, raw: &[u8]) {
+        if let Ok(apdu) = Apdu::parse(raw) {
+            let mut buf = [0u8; 256];
+            let mut res = ResBuf::new(&mut buf);
+            let _ = app.process(&apdu, fs, &mut res);
+        }
+    }
+
+    let mut fs = Fs::new(RamStorage::new(), &[]);
+    fs.scan();
+    let mut app = ManagementApplet::new([0x12, 0x34, 0x56, 0x78, 1, 2, 3, 4]);
+    // Write blobs of several lengths — including past the 64-byte read buffer,
+    // the case that used to panic READ CONFIG — then read each back.
+    for inner in [0usize, 4, 64, 65, 200] {
+        let mut cmd = std::vec![0x00, 0x1C, 0, 0, (inner + 1) as u8, inner as u8];
+        cmd.resize(cmd.len() + inner, 0xAB);
+        run(&mut app, &mut fs, &cmd);
+        run(&mut app, &mut fs, &[0x00, 0x1D, 0, 0, 0x00]);
+    }
+}
+
+// =========================================================================
 // oath_apdu
 // =========================================================================
 

@@ -369,6 +369,41 @@ mod tests {
     }
 
     #[test]
+    fn config_tlv_clamps_a_lying_over_read() {
+        // The Storage::read contract returns the value's *full* length while the
+        // copy is truncated to the buffer, so every caller must clamp the
+        // returned length to its buffer. Model a backend that reports far more
+        // than the 64-byte buffer: config_tlv must clamp, not slice out of
+        // bounds. (RamStorage honours the contract via the real length; this
+        // exercises the clamp against an even larger claim.)
+        struct OverRead;
+        impl Storage for OverRead {
+            fn read(&mut self, fid: u16, buf: &mut [u8]) -> Option<usize> {
+                (fid == EF_DEV_CONF).then(|| {
+                    buf.fill(0xAB);
+                    255 // claim far more than buf.len()
+                })
+            }
+            fn write(&mut self, _: u16, _: &[u8]) -> rsk_sdk::error::Result<()> {
+                Ok(())
+            }
+            fn remove(&mut self, _: u16) -> rsk_sdk::error::Result<()> {
+                Ok(())
+            }
+            fn size(&mut self, fid: u16) -> Option<usize> {
+                (fid == EF_DEV_CONF).then_some(255)
+            }
+            fn for_each_key(&mut self, _: &mut dyn FnMut(u16)) {}
+        }
+        let mut fs = Fs::new(OverRead, &[]);
+        let mut out = [0u8; 256];
+        let mut res = ResBuf::new(&mut out);
+        assert_eq!(config_tlv(&[0u8; 4], &mut fs, &mut res), Sw::OK);
+        let body = res.as_slice();
+        assert_eq!(body[0] as usize, body.len() - 1);
+    }
+
+    #[test]
     fn write_config_rejects_bad_length() {
         let mut app = ManagementApplet::new([0; 8]);
         let mut fs = fs();
