@@ -203,6 +203,18 @@ test corpus and the Gnuk/OpenPGP card suite (see
 [third_party/](../third_party/) if vendored, or run them from their
 upstream checkouts).
 
+## Real-world interop
+
+Protocol conformance is necessary but not sufficient: a response can be
+spec-arguable yet still trip a strict third-party parser. The layer above
+drives the *real* consumer software — `gpg`, `ssh`, libfido2, `ykman`,
+OpenSC, browsers — and records whether the device works end to end. The
+sweep `tests/interop/run.py` automates the read-only CLI cells; the full
+matrix (including the GUI/ceremony cells) lives in
+[interop.md](interop.md). It is how the `ykman openpgp info` GET DATA `6E`
+wrapper bug was caught — every protocol test passed, only the real ykman
+parser rejected the reply.
+
 ## CI parity
 
 `check.sh` is plain bash over the Nix dev shell — a CI job is

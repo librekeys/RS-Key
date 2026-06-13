@@ -133,6 +133,7 @@ The dev shell puts three tools on `PATH`:
 | [Limitations](docs/limitations.md) | what is not covered, and why |
 | [`unsafe` audit](docs/unsafe.md) | every unsafe site, justified |
 | [Testing](docs/testing.md) | host tests, fuzzing, on-device suites |
+| [Interop](docs/interop.md) | does it work with real `gpg`/`ssh`/browsers/`ykman` — the matrix |
 | [Linux setup](docs/linux.md) | pcscd, udev, polkit, scdaemon |
 | [Motivation](docs/motivation.md) | why this exists |
 | [Contributing](CONTRIBUTING.md) | setup, the merge gate, code rules, how PRs land |
