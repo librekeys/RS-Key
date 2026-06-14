@@ -942,14 +942,7 @@ fn emit_tlv(buf: &mut [u8], n: &mut usize, tag: u8, val: &[u8]) -> bool {
 /// Constant-time equality — the access-code MAC compare must not be a timing
 /// oracle, and short responses must never match.
 fn ct_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut d = 0u8;
-    for (x, y) in a.iter().zip(b) {
-        d |= x ^ y;
-    }
-    d == 0
+    rsk_crypto::ct_eq(a, b)
 }
 
 #[cfg(test)]

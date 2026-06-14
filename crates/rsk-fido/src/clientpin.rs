@@ -504,14 +504,7 @@ fn clear_force_change<S: Storage, R: Rng>(ctx: &mut Ctx<S, R>) -> Result<(), Cta
 }
 
 fn pinproto_ct_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
+    rsk_crypto::ct_eq(a, b)
 }
 
 fn encode<F>(out: &mut [u8], f: F) -> Result<usize, CtapError>

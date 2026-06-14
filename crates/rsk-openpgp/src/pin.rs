@@ -90,14 +90,7 @@ impl Drop for Session {
 
 /// Constant-time equality (avoids a verifier timing leak).
 fn ct_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
+    rsk_crypto::ct_eq(a, b)
 }
 
 /// Decrement the PIN's retry counter in EF_PW_PRIV. Returns the remaining

@@ -55,7 +55,9 @@ pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     for (x, y) in a.iter().zip(b.iter()) {
         diff |= x ^ y;
     }
-    diff == 0
+    // Barrier so a future compiler can't fold the OR-accumulate into an
+    // early-exit branch (CT is verified in disassembly today; this pins it).
+    core::hint::black_box(diff) == 0
 }
 
 /// HKDF-SHA256 extract-then-expand into `okm`.

@@ -9,7 +9,7 @@
 
 use core::cell::RefCell;
 
-use rsk_crypto::{aes128_encrypt_block, hmac_sha1};
+use rsk_crypto::{aes128_encrypt_block, ct_eq, hmac_sha1};
 use rsk_fs::{Fs, Storage};
 use rsk_sdk::{Apdu, Applet, ResBuf, Sw};
 
@@ -264,9 +264,10 @@ impl<'a> OtpApplet<'a> {
             if data.len() < CONFIG_SIZE + ACC_CODE_SIZE {
                 return Sw::WRONG_LENGTH;
             }
-            if data[CONFIG_SIZE..CONFIG_SIZE + ACC_CODE_SIZE]
-                != stored[OFF_ACC_CODE..OFF_ACC_CODE + ACC_CODE_SIZE]
-            {
+            if !ct_eq(
+                &data[CONFIG_SIZE..CONFIG_SIZE + ACC_CODE_SIZE],
+                &stored[OFF_ACC_CODE..OFF_ACC_CODE + ACC_CODE_SIZE],
+            ) {
                 return Sw::SECURITY_STATUS_NOT_SATISFIED;
             }
         }
@@ -311,9 +312,10 @@ impl<'a> OtpApplet<'a> {
             if data.len() < CONFIG_SIZE + ACC_CODE_SIZE {
                 return Sw::WRONG_LENGTH;
             }
-            if data[CONFIG_SIZE..CONFIG_SIZE + ACC_CODE_SIZE]
-                != stored[OFF_ACC_CODE..OFF_ACC_CODE + ACC_CODE_SIZE]
-            {
+            if !ct_eq(
+                &data[CONFIG_SIZE..CONFIG_SIZE + ACC_CODE_SIZE],
+                &stored[OFF_ACC_CODE..OFF_ACC_CODE + ACC_CODE_SIZE],
+            ) {
                 return Sw::SECURITY_STATUS_NOT_SATISFIED;
             }
             let mut merged = [0u8; CONFIG_SIZE];

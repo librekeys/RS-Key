@@ -997,7 +997,7 @@ pub fn rsa_sign(
 ) -> Result<usize, Sw> {
     let mut em = [0u8; MAX_RSA_DIGESTINFO];
     let Some(dlen) = rsa_sign_em(data, &mut em) else {
-        return rsa_raw(key, data, out);
+        return rsa_raw(key, data, out, rng);
     };
     let sig = key
         .sign_with_rng(
@@ -1010,17 +1010,36 @@ pub fn rsa_sign(
     Ok(sig.len())
 }
 
-/// Zero-pad the data to the key size and run the raw RSA private operation
-/// `m^d mod n` (no padding scheme). gpg never reaches this — it always sends a
-/// DigestInfo — so blinding is omitted here.
-fn rsa_raw(key: &RsaPrivateKey, data: &[u8], out: &mut [u8]) -> Result<usize, Sw> {
+/// Run the raw RSA private operation `m^d mod n` (no padding scheme). gpg never
+/// reaches this — it always sends a DigestInfo — but the operation is
+/// base-blinded `(m·rᵉ)ᵈ·r⁻¹ mod n` with a fresh random `r`, so even a
+/// non-conformant caller cannot turn `num-bigint-dig`'s variable-time
+/// exponentiation into a Marvin-style timing oracle on the private exponent.
+fn rsa_raw(
+    key: &RsaPrivateKey,
+    data: &[u8],
+    out: &mut [u8],
+    rng: &mut dyn Rng,
+) -> Result<usize, Sw> {
+    use num_bigint_dig::ModInverse;
     let key_size = key.size();
     if data.len() > key_size {
         return Err(WRONG_DATA);
     }
-    let mut m = [0u8; MAX_RSA_BYTES];
-    m[..data.len()].copy_from_slice(data);
-    let res = BigUint::from_bytes_be(&m[..key_size]).modpow(key.d(), key.n());
+    let (n, e, d) = (key.n(), key.e(), key.d());
+    let m = BigUint::from_bytes_be(data);
+    // Fresh blinding factor r, invertible mod n (retry on the negligible chance
+    // r shares a factor with n).
+    let (r, r_inv) = loop {
+        let mut rb = [0u8; MAX_RSA_BYTES];
+        rng.fill(&mut rb[..key_size]);
+        let cand = BigUint::from_bytes_be(&rb[..key_size]) % n;
+        if let Some(inv) = (&cand).mod_inverse(n).and_then(|i| i.to_biguint()) {
+            break (cand, inv);
+        }
+    };
+    let blinded = (&m * r.modpow(e, n)) % n;
+    let res = (blinded.modpow(d, n) * r_inv) % n;
     let rb = res.to_bytes_be();
     if rb.len() > key_size {
         return Err(Sw::EXEC_ERROR);
@@ -1143,6 +1162,25 @@ mod tests {
         let mut scalar = [0x11u8; 66];
         scalar[0] = 0x00;
         sign_and_verify(Curve::P521, &scalar, 132);
+    }
+
+    /// The raw RSA fallback must be base-blinded yet still compute `m^d mod n`
+    /// exactly, independent of the blinding factor (CT-audit finding #1).
+    #[test]
+    fn rsa_raw_blinded_equals_unblinded() {
+        let key = RsaPrivateKey::new(&mut RngAdapter(&mut SeqRng(7)), 512).unwrap();
+        let ks = key.size();
+        let data = [0x2au8; 40];
+        let mut out = [0u8; MAX_RSA_BYTES];
+        let n = rsa_raw(&key, &data, &mut out, &mut SeqRng(99)).unwrap();
+        assert_eq!(n, ks);
+        let got = BigUint::from_bytes_be(&out[..ks]);
+        let want = BigUint::from_bytes_be(&data).modpow(key.d(), key.n());
+        assert_eq!(got, want, "blinded raw RSA must equal m^d mod n");
+        // The result must not depend on the random blinding factor.
+        let mut out2 = [0u8; MAX_RSA_BYTES];
+        rsa_raw(&key, &data, &mut out2, &mut SeqRng(424242)).unwrap();
+        assert_eq!(out[..ks], out2[..ks], "blinding must cancel");
     }
 
     /// ECDH Diffie-Hellman symmetry: `ECDH(a, B_pub) == ECDH(b, A_pub)` proves the

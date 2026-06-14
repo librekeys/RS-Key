@@ -891,14 +891,7 @@ fn check_ref<S: Storage>(dev: &Device, fs: &mut Fs<S>, fid: u16, retry: usize, p
 
 /// Constant-time slice equality (length public).
 pub(crate) fn ct_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut acc = 0u8;
-    for (x, y) in a.iter().zip(b) {
-        acc |= x ^ y;
-    }
-    acc == 0
+    rsk_crypto::ct_eq(a, b)
 }
 
 /// Append `tag { payload }` with a DER length to `res`.

@@ -44,6 +44,7 @@
 - [Threat model](threat-model.md)
 - [Limitations](limitations.md)
 - [`unsafe` audit](unsafe.md)
+- [Constant-time audit](ct-audit.md)
 
 # Internals
 

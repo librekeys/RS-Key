@@ -198,7 +198,10 @@ library-internal, not wipeable without forking the crates.
   to the embassy organization.
 - One known-unfixed advisory is accepted deliberately: RUSTSEC-2023-0071
   (Marvin timing side channel in `rsa`) — the OpenPGP RSA backend, mitigated
-  by blinding; rationale in `deny.toml`.
+  by per-operation base blinding on **every** private-key path (PKCS#1 v1.5
+  sign, decipher, and the raw fallback `rsa_raw`); rationale in `deny.toml`.
+  The [constant-time audit](ct-audit.md) verified that this blinding leaves no
+  unblinded private-exponent path.
 
 ## Post-quantum notes
 
