@@ -18,5 +18,6 @@ secure_boot_*.pem
 # Documentation site: build output and the mermaid assets that
 # `mdbook-mermaid install` generates next to book.toml (not committed).
 /book/
+/site/
 /mermaid.min.js
 /mermaid-init.js

@@ -1,8 +1,19 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (C) 2026 RS-Key contributors
 
-# Builds the documentation site (mdBook + mdbook-mermaid) and publishes it to
-# GitHub Pages via the official Pages deployment flow (no manual gh-pages push).
+# Builds the *versioned* documentation site (mdBook + mdbook-mermaid) and
+# publishes it to GitHub Pages via the official Pages deployment flow.
+#
+#   main     -> site root                (the default version)
+#   develop  -> /develop/
+#   v* tags  -> /<tag>/   (e.g. /v0.1.0/)
+#
+# Every run rebuilds all versions from their own git refs (see
+# scripts/pages/build-site.sh) and replaces the published site, so the version
+# set always matches the live branches + tags. Branch pushes are path-filtered
+# to docs changes; tag pushes always run (GitHub does not apply `paths` to tag
+# pushes). Versioning takes effect for tags created after this workflow lands;
+# existing tags are picked up on the next main/develop docs push.
 #
 # One-time repo setup: Settings -> Pages -> Build and deployment -> Source =
 # "GitHub Actions". The built site is never committed to the repo.
@@ -11,11 +22,14 @@ name: pages
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
     paths:
       - "docs/**"
       - "book.toml"
       - ".github/workflows/pages.yml"
+      - "scripts/pages/**"
+    tags:
+      - "v*"
   workflow_dispatch:
 
 permissions:
@@ -34,6 +48,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # all branches + tags, so every version can be built
 
       - uses: DeterminateSystems/nix-installer-action@v16
 
@@ -43,19 +59,22 @@ jobs:
           restore-prefixes-first-match: nix-${{ runner.os }}-
 
       - uses: actions/configure-pages@v5
+        id: pages
 
       # mdbook + mdbook-mermaid only (not the firmware dev shell), pinned to the
       # flake's nixpkgs via --inputs-from so the versions match the dev shell.
-      - name: Build the book
+      # PAGES_BASE comes from configure-pages so the per-version site-url is
+      # correct regardless of the repo name.
+      - name: Build the versioned site
+        env:
+          PAGES_BASE: ${{ steps.pages.outputs.base_path }}/
         run: |
-          nix shell --inputs-from . nixpkgs#mdbook nixpkgs#mdbook-mermaid -c bash -c '
-            mdbook-mermaid install .
-            mdbook build
-          '
+          nix shell --inputs-from . nixpkgs#mdbook nixpkgs#mdbook-mermaid -c \
+            ./scripts/pages/build-site.sh site
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: book
+          path: site
 
   deploy:
     needs: build
