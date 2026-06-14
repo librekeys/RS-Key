@@ -399,6 +399,17 @@ fn verify_pin_hash<S: Storage, R: Rng>(
     ctx.fs
         .put(EF_PIN, &pin_data)
         .map_err(|_| CtapError::Other)?;
+    // Read the decremented counter back before trusting it. This single flash
+    // write is the anti-bruteforce gate; a glitch or partial program during put()
+    // could persist the old (higher) count while RAM marches on, silently widening
+    // the retry budget. If the stored value doesn't match, fail closed (treat as
+    // blocked) rather than continue on an unverified count — the same read-back the
+    // OTP fuse writes already do (firmware/src/otp_keys.rs).
+    let mut readback = [0u8; PIN_FILE_LEN];
+    match ctx.fs.read(EF_PIN, &mut readback) {
+        Some(PIN_FILE_LEN) if readback[0] == pin_data[0] => {}
+        _ => return Err(CtapError::PinBlocked),
+    }
     let retries = pin_data[0];
 
     let cand = ctx.dev.pin_derive_verifier(pin_hash);

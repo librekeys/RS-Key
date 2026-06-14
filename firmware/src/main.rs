@@ -215,7 +215,7 @@ async fn main(_spawner: Spawner) {
     config.serial_number = Some("rs-key-0001");
     config.max_power = 100;
     config.max_packet_size_0 = 64;
-    config.device_release = 0x075D; // bcdDevice: our build counter
+    config.device_release = 0x075E; // bcdDevice: our build counter
 
     let mut builder = Builder::new(
         driver,
