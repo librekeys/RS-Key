@@ -75,14 +75,28 @@ covers the security boundary, this page covers feature and hardware gaps.
 ## Hardware / physical
 
 - **No secure element.** The RP2350's OTP fuses, glitch detectors and secure
-  boot are real, but decap, microprobing, advanced fault injection and
-  power/EM side channels are out of scope. *Status: never — wrong silicon
-  class.*
+  boot are real, and RS-Key adds anti-imaging OTP chaffing on top — but decap,
+  microprobing, FIB imaging, advanced fault injection and power/EM side channels
+  remain out of scope. The public RP2350 hacking challenge broke the **A2**
+  stepping; the **A4** stepping fixes the boot-ROM and OTP power-glitch attacks in
+  silicon, but **not** the antifuse-array readout (mitigated only by how secrets
+  are stored — the chaffing RS-Key applies). Our development boards are A2; the
+  firmware is A4-compatible and A4 is recommended. *Status: never — these are
+  silicon properties, not firmware ones; closing them fully is what a dedicated
+  secure element is for.*
 - **XIP TOCTOU residual** — secure boot verifies the image in external QSPI
-  flash, then executes from it; lab hardware emulating the flash chip can
-  swap contents between check and execution (the ~1.7 MB image cannot be
-  copied to the 520 KB SRAM to run verified-in-place). *Status: never on this
-  board; same class as decap.*
+  flash, then executes from it; nothing binds the bytes that were hashed to the
+  bytes later fetched, so hardware interposing on the QSPI bus can serve the
+  genuine image to the verifier and a tampered one to the CPU. The clean fix —
+  copy the image into SRAM, verify, run verified-in-place — does not fit (the
+  ~1.7 MB image plus working RAM far exceeds the 520 KB SRAM), and there is no
+  runtime flash authentication in hardware. Part selection is the real lever: an
+  in-package-flash device (**RP2354**) stacks the flash die on the QSPI bus
+  inside the package, so there is no discrete flash chip to clip an emulator
+  onto and a reliable interposer needs decap-class access. RS-Key is developed
+  and tested on external-flash RP2350 boards, so RP2354 is a recommendation here,
+  not a configuration the project has validated. *Status: never on an
+  external-flash board; decap-class effort on RP2354.*
 - **No TrustZone-M secure/non-secure split.** Considered and rejected: the
   embassy ecosystem has no TrustZone support, so it would mean hand-rolling
   SAU/IDAU configuration, NSC veneers and dual images — the project's

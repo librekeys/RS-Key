@@ -117,6 +117,31 @@ flowchart TD
     keys ~~~ sb ~~~ rb
 ```
 
+### Anti-imaging chaff
+
+Page 58 stores the keys in its **low half** and the bitwise **complement** of
+every key row in its **high half**: `DEVK` at `0xE80…0xE8F` with its complement at
+`0xEA0`, `MKEK` at `0xE90…0xE9F` with its complement at `0xEB0` (offset `0x20` =
+half a page). The firmware never reads the high half — it plays no part in key
+reconstruction (`firmware/src/otp_keys.rs` reads only the key rows). It exists for
+one reason.
+
+The cheapest invasive OTP read demonstrated against this antifuse family
+(IOActive, RP2350 Challenge 1 — see [threat-model.md](threat-model.md)) recovers
+the bitwise **OR of two physically paired bitcell rows**, not the rows
+individually. Raspberry Pi's mitigation is to put the key in one half of a page
+and its complement in the opposite half, so each physical pair reads
+`OR(b, ¬b) = 1` — a uniform all-ones pattern that carries no key bits. The
+low-half / high-half placement here is exactly that scheme, and it neutralises the
+demonstrated readout.
+
+> This defeats the *demonstrated* OR-read. IOActive note that a
+> more advanced attack might separate the paired (even/odd) rows with additional
+> effort — which would read the key half directly, and a plain complement does not
+> stop that. Raspberry Pi have said a forthcoming application note will describe a
+> storage scheme mitigating both the current attack and that hypothetical one; if
+> it prescribes more than complement-in-opposite-half, revisit this.
+
 ## Reading OTP
 
 OTP is readable until a lock says otherwise:
@@ -132,9 +157,14 @@ that failure is the lock working, not a fault.
 
 ## Honest limits
 
-- **OTP is not a secure element.** It hardens against software and BOOTSEL-level
-  attacks, but the antifuses are still on a general-purpose die: decapping and
-  microprobing can read OTP, and that is out of scope ([threat-model.md](threat-model.md)).
+- **OTP is not a secure element.** It hardens against software- and BOOTSEL-level
+  attacks, and the anti-imaging chaff above neutralises the demonstrated
+  passive-voltage-contrast OTP readout. But the antifuses are still on a
+  general-purpose die: a funded lab with a focused ion beam can image them, and
+  that — like laser fault injection and power/EM analysis — is out of scope
+  ([threat-model.md](threat-model.md)). The antifuse readout is not fixed by any
+  silicon stepping; use A4 for the fault and boot-ROM fixes (our own boards are
+  A2, the stepping broken in the public challenge).
 - **It is finite.** The rollback thermometer is 48 bits for the board's life;
   there are 4 key slots. Neither resets. See [anti-rollback.md](anti-rollback.md).
 - **It is per-chip.** None of this carries to another board. A new board is a

@@ -90,14 +90,68 @@ bulk stream, ISO-7816 APDUs, CTAP2 CBOR. Defenses:
 ### 4. Physical / lab attacks — OUT OF SCOPE
 
 Decapping, microprobing, advanced fault injection beyond the RP2350's glitch
-detectors, power/EM side channels, and the **XIP TOCTOU** (emulating the QSPI
-flash chip to swap the image between signature check and execution). The
+detectors, power/EM side channels, and the **XIP TOCTOU** — interposing on the
+QSPI bus to serve the genuine image to secure boot's verifier and a tampered one
+to the CPU, since nothing binds checked bytes to executed bytes and the image is
+too large to verify-in-place from SRAM. An in-package-flash part (RP2354) leaves
+no discrete flash chip to tap, raising a reliable swap to decap-class effort. The
 RP2350 is not a secure element and RS-Key does not pretend otherwise. If your
 threat model includes a funded lab, buy a certified key.
 
 ### 5. Network
 
 None. The device speaks USB only; there is no radio and no IP stack.
+
+## Platform silicon: the RP2350 security challenges
+
+Raspberry Pi has publicly stress-tested the RP2350 die, and the results bound
+RS-Key's physical-attack posture.
+
+**Challenge 1 broke the A2 stepping** ([results][c1]). The task was to extract an
+OTP secret from a board running secure boot. The winning attacks:
+
+- **Aedan Cullen** — voltage glitch on the `USB_OTP_VDD` rail, reading OTP
+  secrets out of the guarded path (erratum E16) ([writeup][cullen], [talk][c38c3]).
+- **Marius Muench** — a glitch plus a boot-ROM flaw, bypassing secure boot to run
+  unsigned code.
+- **Kévin Courdesses** — laser fault injection corrupting the boot-time signature
+  check (erratum E24) ([writeup][courk]).
+- **IOActive** — focused-ion-beam (FIB) plus passive voltage contrast (PVC),
+  reading the antifuse array directly: the bitwise OR of two physically paired
+  bitcell rows ([writeup][ioactive]).
+
+The first three are comparatively cheap fault / boot-ROM attacks; the IOActive
+readout needs FIB-class lab equipment (a tool worth hundreds of thousands of
+dollars, one to two days per target) and applies to *every* device built on the
+Synopsys `dwc_nvm_ts40*` antifuse IP on TSMC's 40 nm node — an antifuse property,
+not an RP2350-specific defect.
+
+**The A4 stepping fixes the fault and boot-ROM attacks in silicon — but not the
+antifuse readout** ([announcement][a4]). A4 closes the boot-ROM errata
+(E20/E21/E24, including the laser signature bypass) in a new boot ROM, the OTP
+power-glitch (E16) through changes to the wrapper circuitry around the OTP macro,
+and the GPIO errata (E9, E3). The antifuse-array PVC readout is explicitly **not**
+fixed in A4; Raspberry Pi's guidance is to mitigate it by how secrets are stored
+in OTP — the chaffing RS-Key applies (see [otp-fuses.md](otp-fuses.md)). A third
+challenge — power side-channel analysis of the secure-boot AES — is open with no
+break reported ([challenge 2][c2]).
+
+**What this means for RS-Key.** Our development boards are **A2** — the broken
+stepping, kept as the conservative worst case. The firmware is **A4-compatible**,
+and A4 is recommended for the fault / boot-ROM attacks above. Against the antifuse
+readout — which no stepping fixes — RS-Key applies the chaffing mitigation
+directly ([otp-fuses.md](otp-fuses.md)). What remains out of scope is unchanged: a
+funded lab with FIB/PVC, laser fault injection, or power/EM analysis against a
+device in hand. No software or provisioning choice on a general-purpose die closes
+those — that is what a dedicated secure element is for ([limitations.md](limitations.md)).
+
+[c1]: https://www.raspberrypi.com/news/security-through-transparency-rp2350-hacking-challenge-results-are-in/
+[a4]: https://www.raspberrypi.com/news/rp2350-a4-rp2354-and-a-new-hacking-challenge/
+[c2]: https://www.raspberrypi.com/news/rp2350-hacking-challenge-2-less-randomisation-more-correlation/
+[cullen]: https://github.com/aedancullen/hacking-the-rp2350
+[c38c3]: https://media.ccc.de/v/38c3-hacking-the-rp2350
+[courk]: https://courk.cc/rp2350-challenge-laser
+[ioactive]: https://www.ioactive.com/raspberry-pi-2350-hacking-challenge/
 
 ## Seed backup (the deliberate exception)
 
