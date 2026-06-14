@@ -11,6 +11,16 @@ HOST="${HOST_TARGET:-aarch64-apple-darwin}"
 
 run() { echo; echo "== $1 =="; shift; "$@"; }
 
+# flake.lock must stay in sync with flake.nix: regenerate the lock (without
+# upgrading existing pins, unlike `nix flake update`) and fail if it changed. A
+# stale committed lock means a "green" run no longer matches flake.nix, silently
+# undermining the reproducible-build / SBOM provenance. Cheap when in sync (no
+# fetch); only an added/removed input in flake.nix produces a diff.
+lock_in_sync() {
+  nix flake lock
+  git diff --exit-code -- flake.lock
+}
+
 run "fmt"                      cargo fmt --all --check
 run "clippy (embedded)"        cargo clippy --workspace -- -D warnings
 run "clippy (host tests)"      cargo clippy -p rsk-sdk -p rsk-fs -p rsk-usb -p rsk-crypto -p rsk-fido -p rsk-openpgp -p rsk-rsa-asm -p rsk-mgmt -p rsk-oath -p rsk-otp -p rsk-piv -p rsk-rescue --target "$HOST" --all-targets -- -D warnings
@@ -37,6 +47,7 @@ run "build firmware (release)" cargo build --release -p firmware
 # The test build: no BOOTSEL presence, so the automated suites don't hang on a touch.
 run "build firmware (test, --no-default-features)" cargo build --release -p firmware --no-default-features
 run "build rsk-wipe (release)" cargo build --release -p rsk-wipe
+run "flake.lock in sync"       lock_in_sync
 # RUSTSEC-2023-0071: rsa Marvin timing side-channel — no fixed release; it is the
 # OpenPGP RSA backend, mitigated by blinding. Justification in deny.toml.
 run "cargo-audit (SCA)"        cargo audit --ignore RUSTSEC-2023-0071
