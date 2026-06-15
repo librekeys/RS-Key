@@ -21,7 +21,7 @@ See [production.md](production.md) for that.
 | Reproducible build | the 8 `.uf2` flavors | the binary is a pure function of the source at the tag — anyone can rebuild it |
 | Repro **gate** | (CI, blocking) | the release job *fails* if any flavor doesn't rebuild bit-identical, so a non-reproducible image is never published |
 | Checksums + signature | `SHA256SUMS` + `SHA256SUMS.cosign.bundle` | the hashes were signed by this repo's release workflow (keyless cosign) |
-| Build provenance | a GitHub **attestation** (not a release file) | which workflow, at which commit, on which runner built each `.uf2` (keyless, via `attest-build-provenance`) |
+| Build provenance | a GitHub **attestation** (not a release file) | which reusable workflow, at which commit, on which runner built each `.uf2` — **SLSA v1 Build L3**, keyless via `attest-build-provenance` |
 | SBOM | `rs-key-<tag>-sbom.cdx.json` | the CycloneDX bill of materials for the firmware crate |
 | Dependency audit | `supply-chain/` (in-repo) | every dependency is covered by an imported audit or a recorded exemption (cargo-vet) |
 
@@ -46,23 +46,34 @@ CI already enforces this: the release job rebuilds all eight flavors with
 ```sh
 cosign verify-blob \
   --bundle SHA256SUMS.cosign.bundle \
-  --certificate-identity-regexp '^https://github.com/TheMaxMur/RS-Key/\.github/workflows/release\.yml@.*$' \
+  --certificate-identity-regexp '^https://github.com/TheMaxMur/RS-Key/\.github/workflows/release-build\.yml@.*$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   SHA256SUMS
 sha256sum -c SHA256SUMS          # then check the artifacts against it
 ```
 
+The certificate identity is **`release-build.yml`**, not `release.yml`: cosign
+runs inside the reusable builder, and Sigstore stamps the cert with the reusable
+workflow's identity (`job_workflow_ref`).
+
 ### 3. Build provenance (GitHub attestation)
 
 ```sh
-gh attestation verify rs-key-<tag>-default.uf2 --repo TheMaxMur/RS-Key
+gh attestation verify rs-key-<tag>-default.uf2 \
+  --repo TheMaxMur/RS-Key \
+  --signer-workflow TheMaxMur/RS-Key/.github/workflows/release-build.yml
 ```
 
-This confirms the `.uf2` was built by `release.yml` in this repo — the attestation
-records the workflow, commit and runner, so a hand-built upload won't verify. The
-provenance is a GitHub attestation (Sigstore-signed, logged in Rekor) kept in the
-attestation API rather than as a release asset, so it stays available even though
-the published release is immutable.
+This confirms the `.uf2` was built by the **`release-build.yml` reusable
+workflow** in this repo — the attestation records the workflow, commit and
+runner, so a hand-built upload won't verify. Pinning `--signer-workflow` to the
+reusable builder is the **SLSA Build L3** check: it proves a *specific, trusted*
+workflow produced the artifact, not merely that something in the repo did.
+(Dropping `--signer-workflow` still verifies an attestation exists for this repo —
+a weaker, Build-L2-style check.) The provenance is a GitHub attestation
+(Sigstore-signed, logged in Rekor) kept in the attestation API rather than as a
+release asset, so it stays available even though the published release is
+immutable.
 
 ## Dependency review — cargo-vet
 

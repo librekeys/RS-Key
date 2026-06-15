@@ -13,21 +13,24 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
 
 ## [Unreleased]
 
-## [0.2.1] — 2026-06-15
+## [0.2.2] — 2026-06-15
 
 No firmware change — `bcdDevice` stays `0x0760` and the eight `.uf2` images are
-bit-identical to 0.2.0. This release ships the fixed release pipeline: 0.2.0
-published its GitHub Release without provenance, because the SLSA generator's
-"append the provenance to the release" model is incompatible with GitHub's
-immutable releases (the late asset upload is rejected — even on a draft).
+bit-identical to 0.2.0. This release ships the fixed, hardened release pipeline:
+0.2.0 published its GitHub Release without provenance, because the SLSA
+generator's "append the provenance to the release" model is incompatible with
+GitHub's immutable releases (the late asset upload is rejected — even on a draft).
 
 ### Changed
 
-- Build provenance now uses GitHub's native `attest-build-provenance`: each
-  `.uf2` is attested keyless (Sigstore/Fulcio + the Rekor log) into the
-  **attestation API** instead of being uploaded as a release asset, so it is
-  compatible with immutable releases. Verify with `gh attestation verify`
-  (`docs/supply-chain.md`).
+- Build provenance now uses GitHub's native `attest-build-provenance`, generated
+  from inside a **reusable workflow** (`release-build.yml`). Running the build
+  and the attestation in an isolated, identity-bound reusable workflow raises the
+  release to **SLSA v1 Build Level 3** (an inline attestation step alone is only
+  Build L2). Each `.uf2` is attested keyless (Sigstore/Fulcio + the Rekor log)
+  into the **attestation API** instead of being uploaded as a release asset, so
+  it stays compatible with immutable releases. Verify with
+  `gh attestation verify --signer-workflow …` (`docs/supply-chain.md`).
 - All GitHub Actions bumped to their current major versions (off the deprecated
   Node 20 runtime).
 
