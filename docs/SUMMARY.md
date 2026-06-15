@@ -29,6 +29,7 @@
 - [Terminal cockpit (rsk-tui)](guides/tui.md)
 - [Audit journal](guides/audit.md)
 - [Enterprise attestation](guides/attestation.md)
+- [AAGUID & metadata](guides/aaguid-metadata.md)
 - [Fleet tooling](guides/fleet.md)
 - [FIPS-style profile](guides/fips.md)
 

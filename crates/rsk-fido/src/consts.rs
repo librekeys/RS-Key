@@ -118,9 +118,15 @@ pub const FLAG_UV: u8 = 0x04; // user verified
 pub const FLAG_AT: u8 = 0x40; // attested credential data included
 pub const FLAG_ED: u8 = 0x80; // extension data included
 
-/// AAGUID — first 16 bytes of SHA-256("Pico FIDO2").
+/// AAGUID — RS-Key's own authenticator-model identifier (UUID **v5**), so the
+/// device stops claiming pico-fido's model identity. Derived reproducibly as
+/// `uuid5(NAMESPACE_URL, "https://github.com/TheMaxMur/RS-Key")`
+/// = `2479c7bf-6b30-5683-9ec8-0e8171a918b7`. Self-assigned: an AAGUID needs no
+/// central registration; FIDO MDS *listing* (a separate, certification-gated
+/// step) is not required for the value itself. One AAGUID across every VID/PID
+/// flavor — it identifies the firmware model, not the USB branding.
 pub const AAGUID: [u8; 16] = [
-    0x89, 0xFB, 0x94, 0xB7, 0x06, 0xC9, 0x36, 0x73, 0x9B, 0x7E, 0x30, 0x52, 0x6D, 0x96, 0x81, 0x45,
+    0x24, 0x79, 0xC7, 0xBF, 0x6B, 0x30, 0x56, 0x83, 0x9E, 0xC8, 0x0E, 0x81, 0x71, 0xA9, 0x18, 0xB7,
 ];
 
 /// firmwareVersion reported by getInfo (CTAP `0x0E`): the shared

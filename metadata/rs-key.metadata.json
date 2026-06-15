@@ -1,0 +1,87 @@
+{
+  "legalHeader": "RS-Key is AGPL-3.0-only firmware; this Metadata Statement is self-published by the RS-Key project and is NOT a FIDO Alliance MDS listing. See metadata/README.md and docs/aaguid-metadata.md.",
+  "description": "RS-Key FIDO2 Authenticator",
+  "aaguid": "2479c7bf-6b30-5683-9ec8-0e8171a918b7",
+  "protocolFamily": "fido2",
+  "schema": 3,
+  "authenticatorVersion": 329476,
+  "upv": [
+    { "major": 1, "minor": 0 }
+  ],
+  "authenticationAlgorithms": [
+    "secp256r1_ecdsa_sha256_raw",
+    "ed25519_eddsa_sha512_raw",
+    "secp384r1_ecdsa_sha384_raw",
+    "secp521r1_ecdsa_sha512_raw",
+    "secp256k1_ecdsa_sha256_raw"
+  ],
+  "publicKeyAlgAndEncodings": [
+    "cose"
+  ],
+  "attestationTypes": [
+    "basic_surrogate"
+  ],
+  "userVerificationDetails": [
+    [ { "userVerificationMethod": "presence_internal" } ],
+    [ { "userVerificationMethod": "passcode_external" } ]
+  ],
+  "keyProtection": [
+    "hardware"
+  ],
+  "matcherProtection": [
+    "on_chip"
+  ],
+  "cryptoStrength": 128,
+  "attachmentHint": [
+    "external",
+    "wired"
+  ],
+  "tcDisplay": [],
+  "attestationRootCertificates": [],
+  "authenticatorGetInfo": {
+    "versions": [
+      "U2F_V2",
+      "FIDO_2_0"
+    ],
+    "extensions": [
+      "credBlob",
+      "credProtect",
+      "hmac-secret",
+      "largeBlobKey",
+      "minPinLength",
+      "hmac-secret-mc",
+      "thirdPartyPayment"
+    ],
+    "aaguid": "2479c7bf6b3056839ec80e8171a918b7",
+    "options": {
+      "ep": false,
+      "rk": true,
+      "up": true,
+      "credMgmt": true,
+      "authnrCfg": true,
+      "clientPin": false,
+      "largeBlobs": true,
+      "pinUvAuthToken": true,
+      "setMinPINLength": true
+    },
+    "maxMsgSize": 7609,
+    "pinUvAuthProtocols": [
+      2,
+      1
+    ],
+    "maxCredentialCountInList": 16,
+    "maxCredentialIdLength": 1024,
+    "algorithms": [
+      { "alg": -7, "type": "public-key" },
+      { "alg": -8, "type": "public-key" },
+      { "alg": -35, "type": "public-key" },
+      { "alg": -36, "type": "public-key" },
+      { "alg": -47, "type": "public-key" }
+    ],
+    "maxSerializedLargeBlobArray": 2048,
+    "forcePINChange": false,
+    "minPINLength": 4,
+    "firmwareVersion": 329476,
+    "maxCredBlobLength": 128
+  }
+}
