@@ -303,8 +303,10 @@ impl<'a> OathApplet<'a> {
         if apdu.p1 != 0xDE || apdu.p2 != 0xAD {
             return Sw::INCORRECT_P1P2;
         }
-        for i in 0..MAX_OATH_CRED {
-            let _ = fs.delete(EF_OATH_CRED + i);
+        let mut fids = [0u16; MAX_OATH_CRED as usize];
+        let n = present_creds(fs, &mut fids);
+        for &fid in &fids[..n] {
+            let _ = fs.delete(fid);
         }
         let _ = fs.delete(EF_OATH_CODE);
         let _ = fs.delete(EF_OTP_PIN);
@@ -318,9 +320,11 @@ impl<'a> OathApplet<'a> {
         }
         // Extended list (nitropy): one data byte 0x01 appends a properties byte.
         let ext = apdu.nc == 1 && apdu.data[0] == 0x01;
+        let mut fids = [0u16; MAX_OATH_CRED as usize];
+        let nfids = present_creds(fs, &mut fids);
         let mut scratch = [0u8; CRED_MAX];
-        for i in 0..MAX_OATH_CRED {
-            let Some(n) = fs.read(EF_OATH_CRED + i, &mut scratch) else {
+        for &fid in &fids[..nfids] {
+            let Some(n) = fs.read(fid, &mut scratch) else {
                 continue;
             };
             let blob = &scratch[..n.min(CRED_MAX)];
@@ -478,9 +482,11 @@ impl<'a> OathApplet<'a> {
         let Some(chal) = find_tag(&apdu.data[..apdu.nc], TAG_CHALLENGE as u16) else {
             return Sw::INCORRECT_PARAMS;
         };
+        let mut fids = [0u16; MAX_OATH_CRED as usize];
+        let nfids = present_creds(fs, &mut fids);
         let mut scratch = [0u8; CRED_MAX];
-        for i in 0..MAX_OATH_CRED {
-            let Some(n) = fs.read(EF_OATH_CRED + i, &mut scratch) else {
+        for &fid in &fids[..nfids] {
+            let Some(n) = fs.read(fid, &mut scratch) else {
                 continue;
             };
             let blob = &scratch[..n.min(CRED_MAX)];
@@ -817,11 +823,32 @@ fn calculate(truncate: bool, key: &[u8], chal: &[u8], res: &mut ResBuf) -> Optio
     Some(())
 }
 
-/// Scan the credential slots for a blob whose `TAG_NAME` equals `name`; the
-/// blob is left in `buf`.
+/// FIDs of every present OATH credential (slots `EF_OATH_CRED..`), gathered in a
+/// single storage pass; returns the count written to `out`. Iterating these is
+/// O(present). The old `for i in 0..MAX_OATH_CRED { fs.read/delete/has_data }`
+/// probe was O(255·items): a read of an *absent* slot rescans all of flash, so
+/// sweeping the whole 255-slot range cost tens of seconds on a busy store. See
+/// the anti-pattern note on [`rsk_fs::Fs::for_each_key`].
+fn present_creds<S: Storage>(fs: &mut Fs<S>, out: &mut [u16; MAX_OATH_CRED as usize]) -> usize {
+    let mut n = 0;
+    fs.for_each_key(&mut |fid| {
+        if (EF_OATH_CRED..EF_OATH_CRED + MAX_OATH_CRED).contains(&fid) && n < out.len() {
+            out[n] = fid;
+            n += 1;
+        }
+    });
+    // for_each_key yields storage order; sort to the old FID-order sweep so LIST /
+    // CALCULATE ALL responses stay byte-identical to the previous behavior.
+    out[..n].sort_unstable();
+    n
+}
+
+/// Find a present credential whose `TAG_NAME` equals `name`; the blob is left in
+/// `buf`. Only present slots are read (see [`present_creds`]).
 fn find_cred<S: Storage>(fs: &mut Fs<S>, name: &[u8], buf: &mut [u8]) -> Option<(u16, usize)> {
-    for i in 0..MAX_OATH_CRED {
-        let fid = EF_OATH_CRED + i;
+    let mut fids = [0u16; MAX_OATH_CRED as usize];
+    let nfids = present_creds(fs, &mut fids);
+    for &fid in &fids[..nfids] {
         if let Some(n) = fs.read(fid, buf) {
             let n = n.min(buf.len());
             if find_tag(&buf[..n], TAG_NAME as u16) == Some(name) {
@@ -833,9 +860,18 @@ fn find_cred<S: Storage>(fs: &mut Fs<S>, name: &[u8], buf: &mut [u8]) -> Option<
 }
 
 fn free_slot<S: Storage>(fs: &mut Fs<S>) -> Option<u16> {
-    (0..MAX_OATH_CRED)
-        .map(|i| EF_OATH_CRED + i)
-        .find(|&fid| !fs.has_data(fid))
+    let mut used = [false; MAX_OATH_CRED as usize];
+    fs.for_each_key(&mut |fid| {
+        let Some(i) = fid.checked_sub(EF_OATH_CRED) else {
+            return;
+        };
+        if (i as usize) < used.len() {
+            used[i as usize] = true;
+        }
+    });
+    used.iter()
+        .position(|&u| !u)
+        .map(|i| EF_OATH_CRED + i as u16)
 }
 
 /// Byte range of the first `tag` value inside `blob` (so callers can mutate it
