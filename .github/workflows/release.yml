@@ -44,19 +44,19 @@ jobs:
       hashes: ${{ steps.hashes.outputs.hashes }}
       tag: ${{ steps.tag.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
           ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - uses: DeterminateSystems/nix-installer-action@v16
+      - uses: DeterminateSystems/nix-installer-action@e50d5f73bfe71c2dd0aa4218de8f4afa59f8f81d # v16
 
-      - uses: nix-community/cache-nix-action@v6
+      - uses: nix-community/cache-nix-action@135667ec418502fa5a3598af6fb9eb733888ce6a # v6
         with:
           primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
@@ -65,7 +65,7 @@ jobs:
           key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'flake.lock') }}
           restore-keys: cargo-${{ runner.os }}-
 
-      - uses: sigstore/cosign-installer@v3
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
 
       - name: resolve tag
         id: tag
@@ -173,6 +173,11 @@ jobs:
   # SLSA project's trusted reusable workflow (keyless, no private key). The .uf2
   # subjects come from the build job; the provenance is uploaded to the same
   # release. Verify with `slsa-verifier` (docs/supply-chain.md).
+  #
+  # NB: pinned by version TAG, not a commit SHA — the one `uses:` here that is
+  # intentionally not SHA-pinned. The generator verifies its own ref, and
+  # slsa-verifier checks the builder id
+  # `…/generator_generic_slsa3.yml@refs/tags/v2.1.0`; a SHA pin breaks both.
   provenance:
     needs: [build]
     permissions:
