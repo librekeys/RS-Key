@@ -26,7 +26,7 @@ SELECT = [0x00, 0xA4, 0x04, 0x00, len(OPENPGP_AID)] + OPENPGP_AID + [0x00]
 
 
 def get_data(tag):
-    """GET DATA APDU for a 16-bit tag, Le = 0 (case 2)."""
+    """GET DATA APDU for a 16-bit tag, Le = 0 (case 2, short Le → 256 max)."""
     return [0x00, 0xCA, (tag >> 8) & 0xFF, tag & 0xFF, 0x00]
 
 
@@ -34,7 +34,10 @@ VERSION = [0x00, 0xF1, 0x00, 0x00, 0x00]
 
 # Expected ROM values (rsk-openpgp::files).
 HISTORICAL_BYTES = [0x00, 0x31, 0x84, 0x73, 0x80, 0x01, 0xC0, 0x05, 0x90, 0x00]
-PW_STATUS = [0x01, 127, 127, 127, 3, 3, 3]
+# PW status byte 0 ("PW1 valid for several PSO:CDS") is mutable runtime state
+# (set via PUT DATA C4), so only the fixed tail is asserted: the three max PIN
+# lengths (127) and the three retry counters (3).
+PW_STATUS_FIXED = [127, 127, 127, 3, 3, 3]
 PIPGP_VERSION = [0x04, 0x06, 0x00]
 
 
@@ -43,8 +46,27 @@ def fail(msg):
     sys.exit(1)
 
 
-def expect_ok(conn, apdu, what):
+def transmit_full(conn, apdu):
+    """Transmit, following ISO 7816-4 `61xx` response chaining via GET RESPONSE.
+
+    A short-Le GET DATA caps a reply at 256 bytes; a larger DO (the 6E template
+    runs ~259 B) comes back as 256 bytes + `61 LL`, the firmware signalling LL
+    more via GET RESPONSE (`00 C0 00 00 LL`). scdaemon/gpg/ykman all chain here;
+    this test must too (the chaining was added for them in commit 9cbec02)."""
     data, sw1, sw2 = conn.transmit(apdu)
+    out = list(data)
+    rounds = 0
+    while sw1 == 0x61:
+        rounds += 1
+        if rounds > 16:  # a healthy 6E chains in 1 round; cap so a firmware
+            fail("GET RESPONSE chaining did not terminate (>16 rounds)")
+        more, sw1, sw2 = conn.transmit([0x00, 0xC0, 0x00, 0x00, sw2])
+        out += list(more)
+    return out, sw1, sw2
+
+
+def expect_ok(conn, apdu, what):
+    data, sw1, sw2 = transmit_full(conn, apdu)
     print("%-28s -> %s %02X%02X" % (what, toHexString(data) or "(empty)", sw1, sw2))
     if (sw1, sw2) != (0x90, 0x00):
         fail(f"{what} not 9000 (got {sw1:02X}{sw2:02X})")
@@ -80,8 +102,9 @@ def main():
         fail(f"historical bytes mismatch: {toHexString(hist)}")
 
     pw = expect_ok(conn, get_data(0x00C4), "GET DATA C4 (PW status)")
-    if pw != PW_STATUS:
-        fail(f"PW status mismatch: {toHexString(pw)} != {toHexString(PW_STATUS)}")
+    if len(pw) != 7 or pw[0] not in (0x00, 0x01) or pw[1:] != PW_STATUS_FIXED:
+        fail(f"PW status mismatch: {toHexString(pw)} (byte0 ∈ {{00,01}}, "
+             f"tail must be {toHexString(PW_STATUS_FIXED)})")
 
     app = expect_ok(conn, get_data(0x006E), "GET DATA 6E (app data)")
     if not app:
