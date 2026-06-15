@@ -137,6 +137,13 @@ impl Dispatcher {
         self.current
     }
 
+    /// Drop any selected applet. Used when a fresh logical session begins (a
+    /// CTAPHID_INIT): U2F/CTAP1 has no SELECT of its own and must not inherit a
+    /// vendor-AID selection left over from an earlier session on this transport.
+    pub fn clear_selection(&mut self) {
+        self.current = None;
+    }
+
     /// Process one raw command APDU against `applets` (in registration order),
     /// threading the shared `ctx` into the dispatched applet, writing the
     /// response body into `res` and returning the status word.
@@ -349,6 +356,33 @@ mod tests {
         let cmd = [0x00, 0x10, 0x00, 0x00, 0x03, 0xDE, 0xAD, 0xBE];
         assert_eq!(disp.process(&cmd, &mut applets, &mut (), &mut res), Sw::OK);
         assert_eq!(res.as_slice(), &[0xDE, 0xAD, 0xBE]);
+    }
+
+    #[test]
+    fn clear_selection_drops_the_applet() {
+        // Models the CTAPHID_INIT fix: after a SELECT sticks, clear_selection()
+        // must drop it so the next command is NOT routed to the old applet (the
+        // U2F-hijack bug — a sticky vendor SELECT swallowed U2F traffic).
+        let mut echo = Echo { selected: false };
+        let mut applets: [&mut dyn Applet<()>; 1] = [&mut echo];
+        let mut disp = Dispatcher::new();
+        let mut out = [0u8; 64];
+        let mut res = ResBuf::new(&mut out);
+
+        let mut sel = vec![0x00, 0xA4, 0x04, 0x00, 0x08];
+        sel.extend_from_slice(&[0xA0, 0x00, 0x00, 0x06, 0x47, 0x2F, 0x00, 0x01]);
+        assert_eq!(disp.process(&sel, &mut applets, &mut (), &mut res), Sw::OK);
+        assert_eq!(disp.current(), Some(0));
+
+        disp.clear_selection();
+        assert_eq!(disp.current(), None);
+
+        // The same command that worked while selected now finds nothing selected.
+        let cmd = [0x00, 0x10, 0x00, 0x00, 0x03, 0xDE, 0xAD, 0xBE];
+        assert_eq!(
+            disp.process(&cmd, &mut applets, &mut (), &mut res),
+            Sw::FILE_NOT_FOUND
+        );
     }
 
     #[test]

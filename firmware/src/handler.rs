@@ -172,6 +172,13 @@ impl<'a> AppletHandler<'a> {
 // Synchronous dispatch called by the worker (`crate::worker`) on the thread
 // executor; the CTAPHID transport reaches it through the worker handshake.
 impl AppletHandler<'_> {
+    /// Drop any applet selected over CTAPHID_MSG. Called (via the worker) on a
+    /// CTAPHID_INIT so a fresh session starts with nothing selected — U2F has no
+    /// SELECT and must not inherit a prior vendor-AID selection.
+    pub fn deselect_msg(&mut self) {
+        self.disp.clear_selection();
+    }
+
     pub fn handle_msg(&mut self, apdu: &[u8]) -> &[u8] {
         // U2F (CTAP1) has no SELECT over CTAPHID: route its INS straight to the
         // FIDO applet when nothing else is selected. A vendor AID SELECT takes

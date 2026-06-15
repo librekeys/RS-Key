@@ -71,6 +71,12 @@ static WORKER_LOCK: Mutex<Cs, ()> = Mutex::new(());
 static REQ: Signal<Cs, ()> = Signal::new();
 /// Worker → transport: the response is ready in [`EXCHANGE`].
 static DONE: Signal<Cs, ()> = Signal::new();
+/// Transport → worker: a CTAPHID_INIT started a fresh session, so the worker must
+/// drop any applet selected over the MSG transport before the next U2F/CTAP1
+/// command (U2F has no SELECT and must not inherit a sticky vendor selection).
+/// Set on the high-priority transport, consumed by the worker; the INIT→next-MSG
+/// ordering (the client waits for the INIT reply) makes Relaxed sufficient.
+static MSG_DESELECT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// Hand `data` to the worker as `kind`, await its response, copy it into `out`,
 /// return the length. The caller (a transport on the high-priority executor) wraps
@@ -137,6 +143,9 @@ impl MsgHandler for ClientCtap {
     }
     async fn handle_msg(&mut self, data: &[u8], out: &mut [u8]) -> usize {
         roundtrip(Kind::Msg, data, out).await
+    }
+    fn reset_app_selection(&mut self) {
+        MSG_DESELECT.store(true, core::sync::atomic::Ordering::Relaxed);
     }
     async fn handle_vendor(&mut self, cmd: u8, data: &[u8], out: &mut [u8]) -> Option<usize> {
         roundtrip_vendor(cmd, data, out).await
@@ -272,7 +281,14 @@ impl<'a> Worker<'a> {
             {
                 let r: &[u8] = match *kind {
                     Kind::Cbor => self.ctap.handle_cbor(&req[..*req_len]),
-                    Kind::Msg => self.ctap.handle_msg(&req[..*req_len]),
+                    Kind::Msg => {
+                        // A CTAPHID_INIT since the last MSG drops the applet
+                        // selection so U2F isn't hijacked by a sticky vendor SELECT.
+                        if MSG_DESELECT.swap(false, core::sync::atomic::Ordering::Relaxed) {
+                            self.ctap.deselect_msg();
+                        }
+                        self.ctap.handle_msg(&req[..*req_len])
+                    }
                     Kind::Apdu => self.ccid.handle_apdu(&req[..*req_len]),
                     Kind::Vendor => {
                         *vendor_ok = true;

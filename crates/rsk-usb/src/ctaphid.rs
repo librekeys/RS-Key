@@ -135,6 +135,13 @@ pub trait MsgHandler {
     async fn handle_vendor(&mut self, _cmd: u8, _data: &[u8], _out: &mut [u8]) -> Option<usize> {
         None
     }
+
+    /// Called when a `CTAPHID_INIT` starts a fresh logical session, so the handler
+    /// can drop any applet it had selected over this (MSG) transport. U2F/CTAP1 has
+    /// no SELECT and must not inherit a prior vendor-AID selection; without this a
+    /// sticky selection silently routes U2F REGISTER/AUTHENTICATE/VERSION to the
+    /// vendor applet (→ `0x6D00`). Default: no-op.
+    fn reset_app_selection(&mut self) {}
 }
 
 /// What the transport should do after [`Reassembler::feed`] consumes a frame.
@@ -414,6 +421,9 @@ impl<'d, D: Driver<'d>, H: MsgHandler> CtapHid<'d, D, H> {
     async fn dispatch(&mut self, cid: u32, cmd: u8) {
         match cmd {
             CTAPHID_INIT => {
+                // A fresh session: drop any applet selected over this transport so
+                // U2F (which has no SELECT) can't inherit a prior vendor selection.
+                self.handler.reset_app_selection();
                 // resp: nonce(8) | newcid(4) | iface(1) | major | minor | build | caps
                 let nonce = self.asm.message();
                 let mut resp = [0u8; 17];
