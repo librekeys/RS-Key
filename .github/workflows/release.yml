@@ -7,15 +7,13 @@
 # on a bit-identical rebuild of all eight (a non-reproducible image fails the job
 # before anything is published), generates a CycloneDX SBOM, hashes everything
 # into SHA256SUMS, signs that with keyless cosign (sigstore/Fulcio via OIDC — no
-# private key), and creates the GitHub Release as a DRAFT.
+# private key), attests GitHub build provenance for every .uf2, and publishes the
+# GitHub Release.
 #
-# `provenance` emits SLSA build provenance for every released artifact via the
-# slsa-github-generator reusable workflow (also keyless) and uploads it to the
-# draft: a consumer can verify which workflow, at which commit, on which runner
-# built each .uf2.
-#
-# `publish` un-drafts the release once the provenance is attached — a release
-# becomes immutable on publish, so the provenance must land while it's a draft.
+# The provenance is a GitHub attestation (Sigstore-signed, in the attestation API
+# + the public Rekor log), NOT a release asset — so it stays compatible with
+# immutable releases. A consumer verifies which workflow / commit / runner built
+# each .uf2 with `gh attestation verify` (docs/supply-chain.md).
 #
 # The .uf2 images are UNSIGNED for secure boot — cosign + the SLSA provenance
 # attest the BUILD, not the boot seal. On a secure-boot device, seal an image
@@ -43,10 +41,8 @@ jobs:
     timeout-minutes: 150
     permissions:
       contents: write # create the release + upload assets
-      id-token: write # keyless cosign (OIDC token from Fulcio)
-    outputs:
-      hashes: ${{ steps.hashes.outputs.hashes }}
-      tag: ${{ steps.tag.outputs.tag }}
+      id-token: write # keyless cosign + the attestation's Fulcio OIDC token
+      attestations: write # GitHub build-provenance attestation (immutable-safe)
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -129,13 +125,14 @@ jobs:
           sha256sum ./*.uf2 ./*.cdx.json > SHA256SUMS
           cat SHA256SUMS
 
-      - name: subjects for SLSA provenance
-        id: hashes
-        run: |
-          # base64(sha256sum) over the released build artifacts (.uf2 + SBOM);
-          # clean names (no ./) so `slsa-verifier verify-artifact <file>` matches.
-          cd dist
-          echo "hashes=$(sha256sum ./*.uf2 ./*.cdx.json | sed 's, \./, ,' | base64 -w0)" >> "$GITHUB_OUTPUT"
+      - name: attest build provenance
+        # GitHub-native build provenance for every .uf2 — signed keyless via
+        # Sigstore/Fulcio against this run's OIDC identity, recorded in the GitHub
+        # attestation API + the public Rekor log (NOT a release asset, so it is
+        # compatible with immutable releases). Verify with `gh attestation verify`.
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: dist/*.uf2
 
       - name: sign SHA256SUMS (keyless cosign)
         env:
@@ -163,7 +160,7 @@ jobs:
           } >> release-notes.md
           cat release-notes.md
 
-      - name: create the GitHub Release (draft — published after provenance)
+      - name: create the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -171,45 +168,4 @@ jobs:
           gh release create "$tag" \
             --title "RS-Key $tag" \
             --notes-file release-notes.md \
-            --draft \
             dist/*
-
-  # SLSA build provenance for every released artifact, generated + signed in the
-  # SLSA project's trusted reusable workflow (keyless, no private key). The .uf2
-  # subjects come from the build job; the provenance is uploaded to the same
-  # release. Verify with `slsa-verifier` (docs/supply-chain.md).
-  #
-  # NB: pinned by version TAG, not a commit SHA — the one `uses:` here that is
-  # intentionally not SHA-pinned. The generator verifies its own ref, and
-  # slsa-verifier checks the builder id
-  # `…/generator_generic_slsa3.yml@refs/tags/v2.1.0`; a SHA pin breaks both.
-  provenance:
-    needs: [build]
-    permissions:
-      actions: read # read the workflow run that built the artifacts
-      id-token: write # keyless signing of the provenance (Fulcio OIDC)
-      contents: write # attach the provenance to the release
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
-    with:
-      base64-subjects: "${{ needs.build.outputs.hashes }}"
-      upload-assets: true
-      upload-tag-name: "${{ needs.build.outputs.tag }}"
-      provenance-name: "rs-key-${{ needs.build.outputs.tag }}.intoto.jsonl"
-
-  # Publish (un-draft) the release only after the provenance asset is attached.
-  # A release becomes immutable on publish, so the draft must carry everything —
-  # artifacts (build) and provenance (provenance) — before this flips it live.
-  publish:
-    needs: [build, provenance]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write # publish (un-draft) the release
-    steps:
-      - name: publish the draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release edit "${{ needs.build.outputs.tag }}" \
-            --repo "${{ github.repository }}" \
-            --draft=false

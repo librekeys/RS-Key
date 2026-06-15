@@ -17,17 +17,17 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
 
 No firmware change — `bcdDevice` stays `0x0760` and the eight `.uf2` images are
 bit-identical to 0.2.0. This release ships the fixed release pipeline: 0.2.0
-published its GitHub Release before the SLSA provenance was attached, and
-GitHub's immutable releases rejected the late upload.
-
-### Fixed
-
-- The release workflow now creates the GitHub Release as a draft, uploads the
-  SLSA provenance to it, then publishes last — so the provenance lands before the
-  release turns immutable.
+published its GitHub Release without provenance, because the SLSA generator's
+"append the provenance to the release" model is incompatible with GitHub's
+immutable releases (the late asset upload is rejected — even on a draft).
 
 ### Changed
 
+- Build provenance now uses GitHub's native `attest-build-provenance`: each
+  `.uf2` is attested keyless (Sigstore/Fulcio + the Rekor log) into the
+  **attestation API** instead of being uploaded as a release asset, so it is
+  compatible with immutable releases. Verify with `gh attestation verify`
+  (`docs/supply-chain.md`).
 - All GitHub Actions bumped to their current major versions (off the deprecated
   Node 20 runtime).
 

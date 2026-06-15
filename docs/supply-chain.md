@@ -21,7 +21,7 @@ See [production.md](production.md) for that.
 | Reproducible build | the 8 `.uf2` flavors | the binary is a pure function of the source at the tag — anyone can rebuild it |
 | Repro **gate** | (CI, blocking) | the release job *fails* if any flavor doesn't rebuild bit-identical, so a non-reproducible image is never published |
 | Checksums + signature | `SHA256SUMS` + `SHA256SUMS.cosign.bundle` | the hashes were signed by this repo's release workflow (keyless cosign) |
-| SLSA provenance | `rs-key-<tag>.intoto.jsonl` | which workflow, at which commit, on which runner built each `.uf2` (SLSA build provenance, keyless) |
+| Build provenance | a GitHub **attestation** (not a release file) | which workflow, at which commit, on which runner built each `.uf2` (keyless, via `attest-build-provenance`) |
 | SBOM | `rs-key-<tag>-sbom.cdx.json` | the CycloneDX bill of materials for the firmware crate |
 | Dependency audit | `supply-chain/` (in-repo) | every dependency is covered by an imported audit or a recorded exemption (cargo-vet) |
 
@@ -52,18 +52,17 @@ cosign verify-blob \
 sha256sum -c SHA256SUMS          # then check the artifacts against it
 ```
 
-### 3. SLSA build provenance
+### 3. Build provenance (GitHub attestation)
 
 ```sh
-slsa-verifier verify-artifact rs-key-<tag>-default.uf2 \
-  --provenance-path rs-key-<tag>.intoto.jsonl \
-  --source-uri github.com/TheMaxMur/RS-Key \
-  --source-tag <tag>
+gh attestation verify rs-key-<tag>-default.uf2 --repo TheMaxMur/RS-Key
 ```
 
-This confirms the `.uf2` was produced by `release.yml` in this repo at `<tag>`,
-not hand-built and uploaded. The provenance is generated and signed inside the
-SLSA project's trusted reusable workflow, so the build job can't forge its own.
+This confirms the `.uf2` was built by `release.yml` in this repo — the attestation
+records the workflow, commit and runner, so a hand-built upload won't verify. The
+provenance is a GitHub attestation (Sigstore-signed, logged in Rekor) kept in the
+attestation API rather than as a release asset, so it stays available even though
+the published release is immutable.
 
 ## Dependency review — cargo-vet
 
