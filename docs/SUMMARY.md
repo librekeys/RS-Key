@@ -11,6 +11,7 @@
 - [Hardware](hardware.md)
 - [Build options](build.md)
 - [Releases & verification](releases.md)
+- [Supply chain](supply-chain.md)
 - [Linux host setup](linux.md)
 
 # Using the device

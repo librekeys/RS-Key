@@ -53,6 +53,11 @@ run "flake.lock in sync"       lock_in_sync
 run "cargo-audit (SCA)"        cargo audit --ignore RUSTSEC-2023-0071
 run "cargo-audit (tui SCA)"    cargo audit --file tools/tui/Cargo.lock
 run "cargo-deny"               cargo deny check
+# Supply-chain provenance-of-review: every dependency must be covered by an
+# imported audit (mozilla/google/isrg/zcash) or a recorded exemption. Fails when
+# a new, unreviewed crate enters the tree. --locked uses the committed
+# supply-chain/imports.lock (offline, no fetch). See docs/supply-chain.md.
+run "cargo-vet (supply-chain)" cargo vet --locked
 run "gitleaks (tree)"          gitleaks detect --redact --no-banner
 
 echo

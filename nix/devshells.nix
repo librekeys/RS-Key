@@ -32,6 +32,7 @@
       pkgs.cargo-audit # SCA: RustSec advisory scan of Cargo.lock
       pkgs.cargo-deny # SCA: advisories + licenses + source/ban policy
       pkgs.cargo-cyclonedx # CycloneDX SBOM generation (release provenance)
+      pkgs.cargo-vet # supply-chain: provenance-of-review (audited dependency set)
 
       # Documentation site (see scripts/docs.sh): the GitHub Pages source is the
       # docs/ tree rendered by mdBook; mdbook-mermaid renders the diagrams; lychee
