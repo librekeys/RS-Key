@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 RS-Key contributors
+
+# Keep the SHA-pinned GitHub Actions fresh. Pinning to a commit SHA freezes an
+# action forever otherwise; Dependabot bumps both the SHA and the `# vN` comment
+# when a new release lands (and bumps the tag-pinned slsa-github-generator
+# reusable workflow too). One grouped PR per week so it doesn't spam.
+#
+# Cargo dependencies are intentionally NOT managed here — they are covered by
+# cargo-audit (advisories), cargo-deny (advisories + licenses) and cargo-vet
+# (provenance-of-review) in the merge gate.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
+    open-pull-requests-limit: 5
