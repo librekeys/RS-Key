@@ -13,6 +13,24 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-06-15
+
+No firmware change — `bcdDevice` stays `0x0760` and the eight `.uf2` images are
+bit-identical to 0.2.0. This release ships the fixed release pipeline: 0.2.0
+published its GitHub Release before the SLSA provenance was attached, and
+GitHub's immutable releases rejected the late upload.
+
+### Fixed
+
+- The release workflow now creates the GitHub Release as a draft, uploads the
+  SLSA provenance to it, then publishes last — so the provenance lands before the
+  release turns immutable.
+
+### Changed
+
+- All GitHub Actions bumped to their current major versions (off the deprecated
+  Node 20 runtime).
+
 ## [0.2.0] — 2026-06-15
 
 The cycle since 0.1.0. USB `bcdDevice` is now `0x0760` (incremented once per

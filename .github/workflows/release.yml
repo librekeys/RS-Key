@@ -7,11 +7,15 @@
 # on a bit-identical rebuild of all eight (a non-reproducible image fails the job
 # before anything is published), generates a CycloneDX SBOM, hashes everything
 # into SHA256SUMS, signs that with keyless cosign (sigstore/Fulcio via OIDC — no
-# private key), and publishes the GitHub Release.
+# private key), and creates the GitHub Release as a DRAFT.
 #
-# `provenance` then emits SLSA build provenance for every released artifact via
-# the slsa-github-generator reusable workflow (also keyless): a consumer can
-# verify which workflow, at which commit, on which runner built each .uf2.
+# `provenance` emits SLSA build provenance for every released artifact via the
+# slsa-github-generator reusable workflow (also keyless) and uploads it to the
+# draft: a consumer can verify which workflow, at which commit, on which runner
+# built each .uf2.
+#
+# `publish` un-drafts the release once the provenance is attached — a release
+# becomes immutable on publish, so the provenance must land while it's a draft.
 #
 # The .uf2 images are UNSIGNED for secure boot — cosign + the SLSA provenance
 # attest the BUILD, not the boot seal. On a secure-boot device, seal an image
@@ -159,7 +163,7 @@ jobs:
           } >> release-notes.md
           cat release-notes.md
 
-      - name: create the GitHub Release
+      - name: create the GitHub Release (draft — published after provenance)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -167,6 +171,7 @@ jobs:
           gh release create "$tag" \
             --title "RS-Key $tag" \
             --notes-file release-notes.md \
+            --draft \
             dist/*
 
   # SLSA build provenance for every released artifact, generated + signed in the
@@ -190,3 +195,21 @@ jobs:
       upload-assets: true
       upload-tag-name: "${{ needs.build.outputs.tag }}"
       provenance-name: "rs-key-${{ needs.build.outputs.tag }}.intoto.jsonl"
+
+  # Publish (un-draft) the release only after the provenance asset is attached.
+  # A release becomes immutable on publish, so the draft must carry everything —
+  # artifacts (build) and provenance (provenance) — before this flips it live.
+  publish:
+    needs: [build, provenance]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # publish (un-draft) the release
+    steps:
+      - name: publish the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release edit "${{ needs.build.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --draft=false
