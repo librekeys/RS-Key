@@ -15,6 +15,17 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
 
 ### Fixed
 
+- **Slow applet listing (PIV especially), seen as long green-blinking when
+  switching tabs in Yubico Authenticator.** A backend `read`/`size` of an
+  *absent* file scanned the entire ~1.4 MB KV partition to confirm absence, so
+  enumerating a sparse object range was `O(slots · flash)` — opening the
+  Certificates tab probes ~25 mostly-empty PIV certificate slots, each a full
+  scan. (OATH had the same class of bug, fixed earlier; PIV/others did not.) The
+  filesystem now keeps a fixed present/absent bitmap of all FIDs (rebuilt on
+  boot, maintained on every write/remove), so an absent `read`/`size` returns
+  without touching the backend — `O(1)` instead of a full scan. `bcdDevice`
+  `0x0761` → `0x0762`.
+
 - **USB enumeration race at boot (first field report).** On a Waveshare RP2350
   the device would "blink red and not be recognised," recovering only after
   several replugs. `builder.build()` asserts the bus pull-up, so the host begins
