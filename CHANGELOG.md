@@ -13,6 +13,20 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
 
 ## [Unreleased]
 
+### Fixed
+
+- **USB enumeration race at boot (first field report).** On a Waveshare RP2350
+  the device would "blink red and not be recognised," recovering only after
+  several replugs. `builder.build()` asserts the bus pull-up, so the host begins
+  enumerating the moment the device attaches — but the task that answers control
+  transfers (`usb_task`) was spawned only after a block of per-boot init (seed +
+  attestation cert + OpenPGP DEK + flash writes, heaviest on a fresh device). The
+  host enumerated into an attached-but-mute device and timed out the first
+  descriptor request; a lenient host (macOS) usually won, a strict one often did
+  not. Boot now completes all that init **before** attaching, and spawns
+  `usb_task` immediately after `build()`, so enumeration is serviced with no
+  blocking gap. `bcdDevice` `0x0760` → `0x0761`.
+
 ## [0.2.2] — 2026-06-15
 
 No firmware change — `bcdDevice` stays `0x0760` and the eight `.uf2` images are

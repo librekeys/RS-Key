@@ -206,6 +206,35 @@ async fn main(_spawner: Spawner) {
         usb_itf = rsk_rescue::phy::effective_usb_itf(&phy);
     }
 
+    // Provision/recover all persistent state BEFORE attaching to USB. `builder.build()`
+    // below asserts the bus pull-up (embassy `driver.start` -> `set_pullup_en`), so the
+    // host starts enumerating the instant we attach. The task that answers control
+    // transfers (`usb_task` -> `device.run()`) must then be spawned with no blocking
+    // work in between — otherwise the host enumerates into a device that is attached
+    // but mute and times out the first descriptor request. That window (heaviest on a
+    // fresh device: seed + attestation cert + OpenPGP DEK + flash writes) was the
+    // "blink red / not recognised until several replugs" report on a Waveshare RP2350.
+    let mut trng_cfg = TrngConfig::default();
+    trng_cfg.inverter_chain_length = InverterChainLength::None;
+    let trng = Trng::new(p.TRNG, Irqs, trng_cfg);
+    let mut rng = FidoRng::new(trng);
+
+    let dev = Device {
+        serial_hash: &serial_hash,
+        serial_id: &serial_id,
+        otp_key: otp_mkek.as_ref(),
+    };
+    let _ = rsk_fido::seed::migrate_keydev_boot(&dev, &mut fs);
+    rsk_rescue::keydev::migrate_kbase(&dev, &mut fs);
+    rsk_piv::migrate_kbase(&dev, &mut fs, &mut rng);
+    let _ = rsk_fido::seed::ensure_seed(&dev, &mut fs, &mut rng);
+    let _ = rsk_openpgp::scan_files(&dev, &mut fs, &mut rng);
+    vendor::load_led_config(&mut fs);
+    rsk_otp::power_up_bump(&mut fs);
+
+    let fs_ref = FS.init(RefCell::new(fs));
+    let rng_ref = RNG_CELL.init(RefCell::new(rng));
+
     let driver = UsbDriver::new(p.USB, Irqs);
     Timer::after_millis(200).await;
 
@@ -215,7 +244,7 @@ async fn main(_spawner: Spawner) {
     config.serial_number = Some("rs-key-0001");
     config.max_power = 100;
     config.max_packet_size_0 = 64;
-    config.device_release = 0x0760; // bcdDevice: our build counter
+    config.device_release = 0x0761; // bcdDevice: our build counter
 
     let mut builder = Builder::new(
         driver,
@@ -259,32 +288,13 @@ async fn main(_spawner: Spawner) {
         )
     });
 
+    // Attach to the host (pull-up) and immediately start servicing it: no blocking
+    // work between `build()` and the `usb_task` spawn (see the init note above).
     let usb = builder.build();
     let ctap = hid.map(|h| {
         let (reader, writer) = h.split();
         CtapHid::new(reader, writer, ClientCtap, presence::up_pending)
     });
-
-    let mut trng_cfg = TrngConfig::default();
-    trng_cfg.inverter_chain_length = InverterChainLength::None;
-    let trng = Trng::new(p.TRNG, Irqs, trng_cfg);
-    let mut rng = FidoRng::new(trng);
-
-    let dev = Device {
-        serial_hash: &serial_hash,
-        serial_id: &serial_id,
-        otp_key: otp_mkek.as_ref(),
-    };
-    let _ = rsk_fido::seed::migrate_keydev_boot(&dev, &mut fs);
-    rsk_rescue::keydev::migrate_kbase(&dev, &mut fs);
-    rsk_piv::migrate_kbase(&dev, &mut fs, &mut rng);
-    let _ = rsk_fido::seed::ensure_seed(&dev, &mut fs, &mut rng);
-    let _ = rsk_openpgp::scan_files(&dev, &mut fs, &mut rng);
-    vendor::load_led_config(&mut fs);
-    rsk_otp::power_up_bump(&mut fs);
-
-    let fs_ref = FS.init(RefCell::new(fs));
-    let rng_ref = RNG_CELL.init(RefCell::new(rng));
 
     interrupt::SWI_IRQ_1.set_priority(Priority::P2);
     let hp = EXECUTOR_HIGH.start(interrupt::SWI_IRQ_1);
