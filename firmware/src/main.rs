@@ -21,9 +21,7 @@ use embassy_rp::interrupt::{InterruptExt, Priority};
 use embassy_rp::peripherals::{DMA_CH0, PIO0, TRNG, USB};
 use embassy_rp::pio::{InterruptHandler as PioIrq, Pio};
 use embassy_rp::pio_programs::ws2812::{PioWs2812, PioWs2812Program};
-use embassy_rp::trng::{
-    Config as TrngConfig, InterruptHandler as TrngIrq, InverterChainLength, Trng,
-};
+use embassy_rp::trng::{Config as TrngConfig, InterruptHandler as TrngIrq, Trng};
 use embassy_rp::usb::{Driver as UsbDriver, InterruptHandler as UsbIrq};
 use embassy_time::Timer;
 use embassy_usb::class::hid::{
@@ -215,7 +213,14 @@ async fn main(_spawner: Spawner) {
     // fresh device: seed + attestation cert + OpenPGP DEK + flash writes) was the
     // "blink red / not recognised until several replugs" report on a Waveshare RP2350.
     let mut trng_cfg = TrngConfig::default();
-    trng_cfg.inverter_chain_length = InverterChainLength::None;
+    // The default sample_count (25) is too low for some RP2350 ROSC units: the
+    // TRNG's autocorrelation health-check fails, the hardware soft-resets and
+    // re-samples in a loop, so seeding the DRBG (48 B, `FidoRng::new`) blocked
+    // ~90 s on EVERY boot on one Waveshare RP2350 unit (variable 30–105 s). A
+    // higher sample_count decorrelates consecutive ROSC samples so the check
+    // passes the first time (~1.5 s boot, HW-verified). Entropy quality is
+    // unchanged — the NIST health checks stay enabled, the source is unchanged.
+    trng_cfg.sample_count = 1000;
     let trng = Trng::new(p.TRNG, Irqs, trng_cfg);
     let mut rng = FidoRng::new(trng);
 
@@ -244,7 +249,7 @@ async fn main(_spawner: Spawner) {
     config.serial_number = Some("rs-key-0001");
     config.max_power = 100;
     config.max_packet_size_0 = 64;
-    config.device_release = 0x0763; // bcdDevice: our build counter
+    config.device_release = 0x0764; // bcdDevice: our build counter
 
     let mut builder = Builder::new(
         driver,

@@ -15,6 +15,20 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
 
 ### Fixed
 
+- **~90 s boot stall (LED stuck on the red BOOT status) on some RP2350 boards.**
+  `FidoRng::new` seeds the HMAC-DRBG with 48 bytes from the hardware TRNG, and
+  the embassy driver runs an autocorrelation health-check on every generated
+  block — on a failed check it soft-resets and re-samples in a loop. At the
+  default `sample_count` of 25, consecutive ROSC samples on a marginal unit are
+  too correlated, so the check failed almost every time and seeding blocked a
+  variable 30–105 s on **every** boot (init runs before the USB pull-up, so the
+  device was simply absent from the bus that whole time — looked dead, worst on
+  strict hosts). Raising `sample_count` to 1000 decorrelates the samples so the
+  check passes first try: **~1.5 s boot, HW-verified** on the affected board.
+  Entropy quality is unchanged — the NIST health checks stay enabled and the
+  source is the same; the seed is just gathered reliably. `bcdDevice` `0x0763`
+  → `0x0764`.
+
 - **PIV tab *still* slow after the present-cache fix below: `GET METADATA` over
   empty key slots.** That bitmap guarded `read` and `size`, but `has_data` — a
   third absent-probe method — still called the backend directly, so a missing
