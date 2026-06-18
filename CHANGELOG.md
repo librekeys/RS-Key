@@ -13,6 +13,67 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-06-18
+
+### Changed
+
+- **LED turns green (idle) as soon as the host configures the device**, instead
+  of staying on the red boot status until the first applet command arrives. A
+  healthy, enumerated key that nothing is talking to yet — e.g. a Linux host with
+  no PC/SC daemon running — used to look dead (red) even though it was ready. A
+  device-level USB `Handler::configured` callback now flips the status on
+  configuration. `bcdDevice` `0x0764` → `0x0765`.
+
+### Fixed
+
+- **~90 s boot stall (LED stuck on the red BOOT status) on some RP2350 boards.**
+  `FidoRng::new` seeds the HMAC-DRBG with 48 bytes from the hardware TRNG, and
+  the embassy driver runs an autocorrelation health-check on every generated
+  block — on a failed check it soft-resets and re-samples in a loop. At the
+  default `sample_count` of 25, consecutive ROSC samples on a marginal unit are
+  too correlated, so the check failed almost every time and seeding blocked a
+  variable 30–105 s on **every** boot (init runs before the USB pull-up, so the
+  device was simply absent from the bus that whole time — looked dead, worst on
+  strict hosts). Raising `sample_count` to 1000 decorrelates the samples so the
+  check passes first try: **~1.5 s boot, HW-verified** on the affected board.
+  Entropy quality is unchanged — the NIST health checks stay enabled and the
+  source is the same; the seed is just gathered reliably. `bcdDevice` `0x0763`
+  → `0x0764`.
+
+- **PIV tab *still* slow after the present-cache fix below: `GET METADATA` over
+  empty key slots.** That bitmap guarded `read` and `size`, but `has_data` — a
+  third absent-probe method — still called the backend directly, so a missing
+  FID scanned the whole partition. PIV `GET METADATA` checks `has_data(slot)`
+  first, and `ykman piv info` / Yubico Authenticator's PIV tab read metadata for
+  ~24 mostly-empty slots (`9A/9C/9D/9E` + 20 retired), so each tab switch paid
+  ~24 full scans ≈ 4 s of green-blinking even though every individual APDU
+  answered in ~30 ms. `has_data` now consults the same bitmap → `O(1)` for an
+  absent slot; measured `ykman piv info` **4.16 s → 0.26 s** (~16×) on hardware.
+  `bcdDevice` `0x0762` → `0x0763`.
+
+- **Slow applet listing (PIV especially), seen as long green-blinking when
+  switching tabs in Yubico Authenticator.** A backend `read`/`size` of an
+  *absent* file scanned the entire ~1.4 MB KV partition to confirm absence, so
+  enumerating a sparse object range was `O(slots · flash)` — opening the
+  Certificates tab probes ~25 mostly-empty PIV certificate slots, each a full
+  scan. (OATH had the same class of bug, fixed earlier; PIV/others did not.) The
+  filesystem now keeps a fixed present/absent bitmap of all FIDs (rebuilt on
+  boot, maintained on every write/remove), so an absent `read`/`size` returns
+  without touching the backend — `O(1)` instead of a full scan. `bcdDevice`
+  `0x0761` → `0x0762`.
+
+- **USB enumeration race at boot (first field report).** On a Waveshare RP2350
+  the device would "blink red and not be recognised," recovering only after
+  several replugs. `builder.build()` asserts the bus pull-up, so the host begins
+  enumerating the moment the device attaches — but the task that answers control
+  transfers (`usb_task`) was spawned only after a block of per-boot init (seed +
+  attestation cert + OpenPGP DEK + flash writes, heaviest on a fresh device). The
+  host enumerated into an attached-but-mute device and timed out the first
+  descriptor request; a lenient host (macOS) usually won, a strict one often did
+  not. Boot now completes all that init **before** attaching, and spawns
+  `usb_task` immediately after `build()`, so enumeration is serviced with no
+  blocking gap. `bcdDevice` `0x0760` → `0x0761`.
+
 ## [0.2.2] — 2026-06-15
 
 No firmware change — `bcdDevice` stays `0x0760` and the eight `.uf2` images are

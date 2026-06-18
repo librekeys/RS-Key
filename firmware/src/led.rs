@@ -171,3 +171,17 @@ pub async fn led_task(mut ws2812: PioWs2812<'static, PIO0, 0, NUM_LEDS, Rgb>) {
         Timer::after_millis(5).await;
     }
 }
+
+/// USB device-event handler: flip the boot status to idle the moment the host
+/// *configures* the device, so the LED shows "enumerated & ready" (green) rather
+/// than staying on the red boot status until the first application command. On a
+/// host with no PC/SC daemon (and nothing else probing the key) that first
+/// command may never arrive even though the key is healthy and enumerated, which
+/// looked like a hang. The worker still drives processing/idle per command.
+pub struct StatusHandler;
+
+impl embassy_usb::Handler for StatusHandler {
+    fn configured(&mut self, configured: bool) {
+        set_status(if configured { STATUS_IDLE } else { STATUS_BOOT });
+    }
+}

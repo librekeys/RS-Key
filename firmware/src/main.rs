@@ -21,9 +21,7 @@ use embassy_rp::interrupt::{InterruptExt, Priority};
 use embassy_rp::peripherals::{DMA_CH0, PIO0, TRNG, USB};
 use embassy_rp::pio::{InterruptHandler as PioIrq, Pio};
 use embassy_rp::pio_programs::ws2812::{PioWs2812, PioWs2812Program};
-use embassy_rp::trng::{
-    Config as TrngConfig, InterruptHandler as TrngIrq, InverterChainLength, Trng,
-};
+use embassy_rp::trng::{Config as TrngConfig, InterruptHandler as TrngIrq, Trng};
 use embassy_rp::usb::{Driver as UsbDriver, InterruptHandler as UsbIrq};
 use embassy_time::Timer;
 use embassy_usb::class::hid::{
@@ -118,6 +116,7 @@ static CONTROL_BUF: StaticCell<[u8; 64]> = StaticCell::new();
 static HID_STATE: StaticCell<HidState> = StaticCell::new();
 static KBD_STATE: StaticCell<HidState> = StaticCell::new();
 static OTP_HID_HANDLER: StaticCell<otp_kbd::OtpHidHandler> = StaticCell::new();
+static USB_HANDLER: StaticCell<led::StatusHandler> = StaticCell::new();
 static FS: StaticCell<RefCell<Store>> = StaticCell::new();
 static FLASH_CELL: StaticCell<RefCell<flash_storage::AsyncFlash>> = StaticCell::new();
 static RNG_CELL: StaticCell<RefCell<FidoRng>> = StaticCell::new();
@@ -206,6 +205,42 @@ async fn main(_spawner: Spawner) {
         usb_itf = rsk_rescue::phy::effective_usb_itf(&phy);
     }
 
+    // Provision/recover all persistent state BEFORE attaching to USB. `builder.build()`
+    // below asserts the bus pull-up (embassy `driver.start` -> `set_pullup_en`), so the
+    // host starts enumerating the instant we attach. The task that answers control
+    // transfers (`usb_task` -> `device.run()`) must then be spawned with no blocking
+    // work in between — otherwise the host enumerates into a device that is attached
+    // but mute and times out the first descriptor request. That window (heaviest on a
+    // fresh device: seed + attestation cert + OpenPGP DEK + flash writes) was the
+    // "blink red / not recognised until several replugs" report on a Waveshare RP2350.
+    let mut trng_cfg = TrngConfig::default();
+    // The default sample_count (25) is too low for some RP2350 ROSC units: the
+    // TRNG's autocorrelation health-check fails, the hardware soft-resets and
+    // re-samples in a loop, so seeding the DRBG (48 B, `FidoRng::new`) blocked
+    // ~90 s on EVERY boot on one Waveshare RP2350 unit (variable 30–105 s). A
+    // higher sample_count decorrelates consecutive ROSC samples so the check
+    // passes the first time (~1.5 s boot, HW-verified). Entropy quality is
+    // unchanged — the NIST health checks stay enabled, the source is unchanged.
+    trng_cfg.sample_count = 1000;
+    let trng = Trng::new(p.TRNG, Irqs, trng_cfg);
+    let mut rng = FidoRng::new(trng);
+
+    let dev = Device {
+        serial_hash: &serial_hash,
+        serial_id: &serial_id,
+        otp_key: otp_mkek.as_ref(),
+    };
+    let _ = rsk_fido::seed::migrate_keydev_boot(&dev, &mut fs);
+    rsk_rescue::keydev::migrate_kbase(&dev, &mut fs);
+    rsk_piv::migrate_kbase(&dev, &mut fs, &mut rng);
+    let _ = rsk_fido::seed::ensure_seed(&dev, &mut fs, &mut rng);
+    let _ = rsk_openpgp::scan_files(&dev, &mut fs, &mut rng);
+    vendor::load_led_config(&mut fs);
+    rsk_otp::power_up_bump(&mut fs);
+
+    let fs_ref = FS.init(RefCell::new(fs));
+    let rng_ref = RNG_CELL.init(RefCell::new(rng));
+
     let driver = UsbDriver::new(p.USB, Irqs);
     Timer::after_millis(200).await;
 
@@ -215,7 +250,7 @@ async fn main(_spawner: Spawner) {
     config.serial_number = Some("rs-key-0001");
     config.max_power = 100;
     config.max_packet_size_0 = 64;
-    config.device_release = 0x0760; // bcdDevice: our build counter
+    config.device_release = 0x0765; // bcdDevice: our build counter
 
     let mut builder = Builder::new(
         driver,
@@ -259,32 +294,18 @@ async fn main(_spawner: Spawner) {
         )
     });
 
+    // Go green (idle) the moment the host configures us, not on the first applet
+    // command — a healthy, enumerated key with no PC/SC client talking to it would
+    // otherwise sit on the red boot status. (See `led::StatusHandler`.)
+    builder.handler(USB_HANDLER.init(led::StatusHandler));
+
+    // Attach to the host (pull-up) and immediately start servicing it: no blocking
+    // work between `build()` and the `usb_task` spawn (see the init note above).
     let usb = builder.build();
     let ctap = hid.map(|h| {
         let (reader, writer) = h.split();
         CtapHid::new(reader, writer, ClientCtap, presence::up_pending)
     });
-
-    let mut trng_cfg = TrngConfig::default();
-    trng_cfg.inverter_chain_length = InverterChainLength::None;
-    let trng = Trng::new(p.TRNG, Irqs, trng_cfg);
-    let mut rng = FidoRng::new(trng);
-
-    let dev = Device {
-        serial_hash: &serial_hash,
-        serial_id: &serial_id,
-        otp_key: otp_mkek.as_ref(),
-    };
-    let _ = rsk_fido::seed::migrate_keydev_boot(&dev, &mut fs);
-    rsk_rescue::keydev::migrate_kbase(&dev, &mut fs);
-    rsk_piv::migrate_kbase(&dev, &mut fs, &mut rng);
-    let _ = rsk_fido::seed::ensure_seed(&dev, &mut fs, &mut rng);
-    let _ = rsk_openpgp::scan_files(&dev, &mut fs, &mut rng);
-    vendor::load_led_config(&mut fs);
-    rsk_otp::power_up_bump(&mut fs);
-
-    let fs_ref = FS.init(RefCell::new(fs));
-    let rng_ref = RNG_CELL.init(RefCell::new(rng));
 
     interrupt::SWI_IRQ_1.set_priority(Priority::P2);
     let hp = EXECUTOR_HIGH.start(interrupt::SWI_IRQ_1);
