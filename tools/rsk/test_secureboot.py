@@ -63,6 +63,16 @@ def test_revoke_leaves_valid_guard():
 
 
 def test_pages_locked():
-    assert sb.pages_locked({"page1_lock": sb.PAGE_LOCK_BL_RO, "page2_lock": None}) is True
-    assert sb.pages_locked({"page1_lock": None, "page2_lock": sb.PAGE_LOCK_BL_RO}) is True
+    p = sb.PAGE_LOCK_BL_RO  # 0x141414 — what `secure-boot lock` writes (LOCK_BL set)
+    # LOCK_BL set on either page ⇒ BOOTSEL can no longer write boot keys.
+    assert sb.pages_locked({"page1_lock": p, "page2_lock": None}) is True
+    assert sb.pages_locked({"page1_lock": None, "page2_lock": p}) is True
+    # Unwritten / fully-unlocked pages are not a lock.
     assert sb.pages_locked({"page1_lock": None, "page2_lock": 0}) is False
+    # Regression: a benign pre-existing LOCK_NS=1 with LOCK_BL=0 (0x040404) must
+    # NOT read as bootloader-locked — masking the whole row would false-positive
+    # and wrongly refuse `load-key` on a chip whose non-secure page is read-only.
+    assert sb.pages_locked({"page1_lock": 0x040404, "page2_lock": 0x040404}) is False
+    assert sb.pages_locked({"page1_lock": 0x040404, "page2_lock": None}) is False
+    # LOCK_NS on one page but LOCK_BL on the other ⇒ still locked (LOCK_BL wins).
+    assert sb.pages_locked({"page1_lock": 0x040404, "page2_lock": p}) is True
