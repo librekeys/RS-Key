@@ -116,6 +116,7 @@ static CONTROL_BUF: StaticCell<[u8; 64]> = StaticCell::new();
 static HID_STATE: StaticCell<HidState> = StaticCell::new();
 static KBD_STATE: StaticCell<HidState> = StaticCell::new();
 static OTP_HID_HANDLER: StaticCell<otp_kbd::OtpHidHandler> = StaticCell::new();
+static USB_HANDLER: StaticCell<led::StatusHandler> = StaticCell::new();
 static FS: StaticCell<RefCell<Store>> = StaticCell::new();
 static FLASH_CELL: StaticCell<RefCell<flash_storage::AsyncFlash>> = StaticCell::new();
 static RNG_CELL: StaticCell<RefCell<FidoRng>> = StaticCell::new();
@@ -249,7 +250,7 @@ async fn main(_spawner: Spawner) {
     config.serial_number = Some("rs-key-0001");
     config.max_power = 100;
     config.max_packet_size_0 = 64;
-    config.device_release = 0x0764; // bcdDevice: our build counter
+    config.device_release = 0x0765; // bcdDevice: our build counter
 
     let mut builder = Builder::new(
         driver,
@@ -292,6 +293,11 @@ async fn main(_spawner: Spawner) {
             },
         )
     });
+
+    // Go green (idle) the moment the host configures us, not on the first applet
+    // command — a healthy, enumerated key with no PC/SC client talking to it would
+    // otherwise sit on the red boot status. (See `led::StatusHandler`.)
+    builder.handler(USB_HANDLER.init(led::StatusHandler));
 
     // Attach to the host (pull-up) and immediately start servicing it: no blocking
     // work between `build()` and the `usb_task` spawn (see the init note above).

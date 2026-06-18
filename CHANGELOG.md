@@ -13,6 +13,15 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
 
 ## [Unreleased]
 
+### Changed
+
+- **LED turns green (idle) as soon as the host configures the device**, instead
+  of staying on the red boot status until the first applet command arrives. A
+  healthy, enumerated key that nothing is talking to yet — e.g. a Linux host with
+  no PC/SC daemon running — used to look dead (red) even though it was ready. A
+  device-level USB `Handler::configured` callback now flips the status on
+  configuration. `bcdDevice` `0x0764` → `0x0765`.
+
 ### Fixed
 
 - **~90 s boot stall (LED stuck on the red BOOT status) on some RP2350 boards.**
