@@ -7,7 +7,7 @@
 //! the soft-lock pair additionally requires a physical touch.
 
 use minicbor::Decoder;
-use rsk_fs::Storage;
+use rsk_fs::{Sealed, Storage};
 use zeroize::Zeroize;
 
 use rsk_crypto::pinproto::PinProto;
@@ -178,7 +178,7 @@ pub fn authenticator_config<S: Storage, R: Rng>(
 /// power cycle needs a vendor UNLOCK before any FIDO operation; recovery from a
 /// lost lock key is an authenticatorReset (the identity is gone — by design).
 fn aut_enable<S: Storage, R: Rng>(ctx: &mut Ctx<S, R>, param: &[u8]) -> CtapResult {
-    if !ctx.fs.has_data(EF_KEY_DEV) {
+    if !ctx.fs.has_key(EF_KEY_DEV) {
         return Err(CtapError::NotAllowed); // already locked, or no seed at all
     }
     if !ctx.state.mse_active {
@@ -194,8 +194,8 @@ fn aut_enable<S: Storage, R: Rng>(ctx: &mut Ctx<S, R>, param: &[u8]) -> CtapResu
         let blob = seal_seed_locked(ctx.rng, &lock_key, &seed);
         seed.zeroize();
         ctx.fs
-            .put(EF_KEY_DEV_ENC, &blob)
-            .and_then(|()| ctx.fs.delete(EF_KEY_DEV))
+            .put_key(EF_KEY_DEV_ENC, Sealed::wrap(&blob))
+            .and_then(|()| ctx.fs.delete_key(EF_KEY_DEV))
     });
     lock_key.zeroize();
     match r {
@@ -225,7 +225,7 @@ fn aut_disable<S: Storage, R: Rng>(ctx: &mut Ctx<S, R>) -> CtapResult {
     seed.zeroize();
     r.map_err(|_| CtapError::Other)?;
     ctx.fs
-        .delete(EF_KEY_DEV_ENC)
+        .delete_key(EF_KEY_DEV_ENC)
         .map_err(|_| CtapError::Other)?;
     ctx.state.clear_keydev_dec();
     journal::append(ctx, journal::EV_LOCK_RELEASE, 0, &[]);

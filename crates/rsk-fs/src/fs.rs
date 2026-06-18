@@ -6,6 +6,7 @@
 use heapless::Vec;
 use rsk_sdk::error::{Error, Result};
 
+use crate::sealed::{KeyFid, Sealed};
 use crate::storage::Storage;
 use crate::{EF_META, FILE_EF_TRANSPARENT, FILE_TYPE_WORKING_EF, MAX_DYNAMIC_FILES};
 
@@ -198,6 +199,34 @@ impl<S: Storage> Fs<S> {
         self.mark_absent(fid);
         self.dynamic.retain(|&f| f != fid);
         Ok(())
+    }
+
+    // ---- typed key-slot API ----
+    // Secret key material reaches flash only through these. They delegate to the
+    // plaintext primitives, but because a [`KeyFid`] is not a `u16` and
+    // [`put_key`](Self::put_key) demands a [`Sealed`] payload, a key slot can be
+    // neither written nor read by the generic `put`/`read` — the seal API is the
+    // only route in. See [`crate::sealed`].
+
+    /// Store sealed key material at `fid`.
+    pub fn put_key(&mut self, fid: KeyFid, sealed: Sealed) -> Result<()> {
+        self.put(fid.get(), sealed.as_bytes())
+    }
+
+    /// Copy a sealed key blob into `buf`; returns its full length, or `None` if
+    /// the slot is absent.
+    pub fn read_key(&mut self, fid: KeyFid, buf: &mut [u8]) -> Option<usize> {
+        self.read(fid.get(), buf)
+    }
+
+    /// Whether the key slot holds non-empty data.
+    pub fn has_key(&mut self, fid: KeyFid) -> bool {
+        self.has_data(fid.get())
+    }
+
+    /// Delete a key slot.
+    pub fn delete_key(&mut self, fid: KeyFid) -> Result<()> {
+        self.delete(fid.get())
     }
 
     /// ACL gate for `op` (an `ACL_OP_*` index).
@@ -528,6 +557,31 @@ mod tests {
             st.size_calls, 0,
             "absent size/has_data must not probe the backend"
         );
+    }
+
+    #[test]
+    fn typed_key_api_roundtrips() {
+        // The typed key API (`put_key`/`read_key`/`has_key`/`delete_key`) is the
+        // only way to reach a `KeyFid` slot; it must behave exactly like the
+        // plaintext path it delegates to.
+        let mut fs = fs();
+        let slot = KeyFid::new(0xCEFF);
+        let mut buf = [0u8; 32];
+        // Absent at first.
+        assert_eq!(fs.read_key(slot, &mut buf), None);
+        assert!(!fs.has_key(slot));
+        // Store a (notionally sealed) blob and read it back.
+        let blob = b"nonce|ciphertext|tag";
+        fs.put_key(slot, Sealed::wrap(blob)).unwrap();
+        assert!(fs.has_key(slot));
+        assert_eq!(fs.read_key(slot, &mut buf), Some(blob.len()));
+        assert_eq!(&buf[..blob.len()], blob);
+        // Same bytes underneath — the type is a guard rail, not a separate store.
+        assert_eq!(fs.read(slot.get(), &mut buf), Some(blob.len()));
+        // Delete clears it.
+        fs.delete_key(slot).unwrap();
+        assert!(!fs.has_key(slot));
+        assert_eq!(fs.read_key(slot, &mut buf), None);
     }
 
     #[test]

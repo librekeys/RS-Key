@@ -4,6 +4,8 @@
 //! FIDO constants — AIDs, CTAP command bytes, COSE algorithms/curves, auth-data
 //! flags, the AAGUID, size limits and flash file ids.
 
+use rsk_fs::KeyFid;
+
 /// FIDO2 applet AID.
 pub const FIDO_AID: &[u8] = &[0xA0, 0x00, 0x00, 0x06, 0x47, 0x2F, 0x00, 0x01];
 /// Backup FIDO2 applet AID.
@@ -167,14 +169,14 @@ pub const MAX_RESIDENT_CREDENTIALS: u16 = 256;
 pub const EF_AUDIT_META: u16 = 0xC100; // ver ‖ seq_next ‖ start ‖ epoch hash
 pub const EF_AUDIT_RING: u16 = 0xC110; // entry slots, 0xC110..0xC110+AUDIT_RING_SLOTS
 pub const AUDIT_RING_SLOTS: u32 = 128;
-pub const EF_KEY_DEV: u16 = 0xCC00; // device master seed, encrypted
+pub const EF_KEY_DEV: KeyFid = KeyFid::new(0xCC00); // device master seed, kbase-sealed
 pub const EF_BACKUP_SEALED: u16 = 0xCC02; // [1] once the seed has been backed up
 /// Soft-locked seed: ChaCha20-Poly1305(host lock key) over the seed value.
-pub const EF_KEY_DEV_ENC: u16 = 0xCC03;
+pub const EF_KEY_DEV_ENC: KeyFid = KeyFid::new(0xCC03);
 pub const EF_EE_DEV: u16 = 0xCE00; // U2F end-entity attestation certificate
 // Org-provisioned attestation (vendor ATT_IMPORT). Device identity, not user
 // data: both survive authenticatorReset; ATT_CLEAR removes them.
-pub const EF_ATT_KEY: u16 = 0xCE10; // org attestation P-256 scalar, kbase-sealed
+pub const EF_ATT_KEY: KeyFid = KeyFid::new(0xCE10); // org attestation P-256 scalar, kbase-sealed
 pub const EF_ATT_CHAIN: u16 = 0xCE11; // packed DER chain: count ‖ (len LE ‖ der)*
 /// `enableEnterpriseAttestation` — persists until reset (CTAP 2.1), hence flash.
 pub const EF_EA_ENABLED: u16 = 0xCE12;

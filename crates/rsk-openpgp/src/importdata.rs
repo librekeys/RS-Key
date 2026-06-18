@@ -7,7 +7,7 @@
 //! algorithm-attribute DO (`EF_ALGO_PRIV{1,2,3}`), set beforehand via PUT DATA.
 
 use rsk_crypto::Device;
-use rsk_fs::{Fs, Storage};
+use rsk_fs::{Fs, KeyFid, Storage};
 use rsk_sdk::Sw;
 
 use crate::consts::*;
@@ -69,7 +69,7 @@ pub fn import_data<S: Storage>(
 /// Parse the `4D` header through the control-reference template tag: returns the
 /// key-slot FID and the position just after the (skipped) CRT body. Pure (no fs /
 /// crypto), so it is fuzzable in isolation.
-pub fn parse_ehl_head(data: &[u8]) -> Result<(u16, usize), Sw> {
+pub fn parse_ehl_head(data: &[u8]) -> Result<(KeyFid, usize), Sw> {
     let mut pos = 0usize;
     // 4D extended-header-list tag + its (ignored) length.
     if *data.first().ok_or(WRONG_DATA)? != 0x4D {
@@ -148,7 +148,7 @@ fn try_import<S: Storage>(
     let (off, len) = parse_ehl_body(data, pos)?;
 
     // The algorithm attribute decides RSA vs EC and (for EC) the curve.
-    let algo_fid = fid - 0x10;
+    let algo_fid = fid.get() - 0x10;
     let mut algo_buf = [0u8; 16];
     let algo: &[u8] = match fs.read(algo_fid, &mut algo_buf) {
         Some(n) if n > 0 => &algo_buf[..n],
@@ -178,7 +178,7 @@ fn try_import<S: Storage>(
             // Public-key DO → EF_PB_* (slot FID + 3).
             let mut pub_do = [0u8; MAX_RSA_PUBDO];
             let don = make_rsa_response(&key, &mut pub_do);
-            fs.put(fid + 3, &pub_do[..don])
+            fs.put(fid.get() + 3, &pub_do[..don])
                 .map_err(|_| Sw::MEMORY_FAILURE)?;
 
             if fid == EF_PK_SIG {
@@ -201,7 +201,7 @@ fn try_import<S: Storage>(
             let plen = key.public_point(&mut point)?;
             let mut pub_do = [0u8; 8 + MAX_EC_POINT];
             let don = make_ec_pubkey_do(&point[..plen], &mut pub_do);
-            fs.put(fid + 3, &pub_do[..don])
+            fs.put(fid.get() + 3, &pub_do[..don])
                 .map_err(|_| Sw::MEMORY_FAILURE)?;
 
             if fid == EF_PK_SIG {

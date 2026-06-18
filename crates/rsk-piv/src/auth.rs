@@ -118,7 +118,7 @@ pub(crate) fn general_authenticate<S: Storage>(
     }
 
     let mut meta = [0u8; 8];
-    let Some(_meta_len) = fs.meta_find(key_fid(key_ref), &mut meta) else {
+    let Some(_meta_len) = fs.meta_find(key_fid(key_ref).get(), &mut meta) else {
         mgm_key.zeroize();
         return Sw::REFERENCE_NOT_FOUND;
     };

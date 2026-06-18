@@ -9,9 +9,11 @@
 //! a RAM backend. File metadata (type/ACL/parent) comes from a static table.
 
 pub mod fs;
+pub mod sealed;
 pub mod storage;
 
 pub use fs::{FileDesc, Fs};
+pub use sealed::{KeyFid, Sealed};
 pub use storage::Storage;
 
 // ---- file types ----

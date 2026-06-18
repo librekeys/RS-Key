@@ -6,7 +6,7 @@
 //! `B8`→DEC, `A4`→AUT) and returns its public-key DO; `P1 = 0x81` reads it back.
 
 use rsk_crypto::Device;
-use rsk_fs::{Fs, Storage};
+use rsk_fs::{Fs, KeyFid, Storage};
 use rsk_sdk::Sw;
 
 use crate::Rng;
@@ -73,12 +73,12 @@ fn generate<S: Storage>(
     fs: &mut Fs<S>,
     sess: &Session,
     rng: &mut dyn Rng,
-    fid: u16,
+    fid: KeyFid,
     out: &mut [u8],
 ) -> Result<usize, Sw> {
     // The algorithm attribute (slot FID − 0x10) decides RSA vs EC and the curve.
     let mut algo_buf = [0u8; 16];
-    let algo: &[u8] = match fs.read(fid - 0x10, &mut algo_buf) {
+    let algo: &[u8] = match fs.read(fid.get() - 0x10, &mut algo_buf) {
         Some(n) if n > 0 => &algo_buf[..n],
         _ => DEFAULT_ALGO,
     };
@@ -117,7 +117,7 @@ fn keygen_tail<S: Storage>(
     fs: &mut Fs<S>,
     sess: &Session,
     rng: &mut dyn Rng,
-    fid: u16,
+    fid: KeyFid,
 ) -> Result<(), Sw> {
     if fid == EF_PK_SIG {
         reset_sig_count(fs)?;
@@ -135,21 +135,22 @@ fn keygen_tail<S: Storage>(
 /// response.
 fn store_public<S: Storage>(
     fs: &mut Fs<S>,
-    fid: u16,
+    fid: KeyFid,
     pub_do: &[u8],
     out: &mut [u8],
 ) -> Result<usize, Sw> {
-    fs.put(fid + 3, pub_do).map_err(|_| Sw::MEMORY_FAILURE)?;
+    fs.put(fid.get() + 3, pub_do)
+        .map_err(|_| Sw::MEMORY_FAILURE)?;
     out[..pub_do.len()].copy_from_slice(pub_do);
     Ok(pub_do.len())
 }
 
 /// `P1 = 0x81`: return the stored public-key DO from `EF_PB_*` (slot FID + 3).
-fn read_public<S: Storage>(fs: &mut Fs<S>, fid: u16, out: &mut [u8]) -> Result<usize, Sw> {
-    if !fs.has_data(fid + 3) {
+fn read_public<S: Storage>(fs: &mut Fs<S>, fid: KeyFid, out: &mut [u8]) -> Result<usize, Sw> {
+    if !fs.has_data(fid.get() + 3) {
         return Err(Sw::REFERENCE_NOT_FOUND);
     }
-    fs.read(fid + 3, out).ok_or(Sw::REFERENCE_NOT_FOUND)
+    fs.read(fid.get() + 3, out).ok_or(Sw::REFERENCE_NOT_FOUND)
 }
 
 // --- CCID keepalive path: split RSA generate so the slow keygen can run async ---
@@ -169,7 +170,7 @@ pub fn rsa_generate_params<S: Storage>(
     p1: u8,
     p2: u8,
     data: &[u8],
-) -> Result<Option<(u16, usize)>, Sw> {
+) -> Result<Option<(KeyFid, usize)>, Sw> {
     if p1 != 0x80 {
         return Ok(None); // read-public (0x81) is fast
     }
@@ -189,7 +190,7 @@ pub fn rsa_generate_params<S: Storage>(
         _ => return Err(WRONG_DATA),
     };
     let mut algo_buf = [0u8; 16];
-    let algo: &[u8] = match fs.read(fid - 0x10, &mut algo_buf) {
+    let algo: &[u8] = match fs.read(fid.get() - 0x10, &mut algo_buf) {
         Some(n) if n > 0 => &algo_buf[..n],
         _ => DEFAULT_ALGO,
     };
@@ -208,7 +209,7 @@ pub fn rsa_generate_finish<S: Storage>(
     fs: &mut Fs<S>,
     sess: &Session,
     rng: &mut dyn Rng,
-    fid: u16,
+    fid: KeyFid,
     key: &RsaPrivateKey,
     out: &mut [u8],
 ) -> (usize, Sw) {

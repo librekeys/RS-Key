@@ -21,7 +21,7 @@ mod x509;
 use core::cell::RefCell;
 
 use rsk_crypto::Device;
-use rsk_fs::{Fs, Storage};
+use rsk_fs::{Fs, Sealed, Storage};
 pub use rsk_openpgp::Rng;
 use rsk_openpgp::keys::make_rsa_response;
 // PIV reuses the OpenPGP user-presence trait, so the firmware's existing
@@ -587,7 +587,7 @@ impl PivApplet<'_> {
             }
             SLOT_CARDMGM => {
                 let mut meta = [0u8; 8];
-                let Some(n) = fs.meta_find(key_fid(SLOT_CARDMGM), &mut meta) else {
+                let Some(n) = fs.meta_find(key_fid(SLOT_CARDMGM).get(), &mut meta) else {
                     return Sw::REFERENCE_NOT_FOUND;
                 };
                 if n < 3 {
@@ -606,11 +606,11 @@ impl PivApplet<'_> {
                 Sw::OK
             }
             s if is_key(s) => {
-                if !fs.has_data(key_fid(s)) {
+                if !fs.has_key(key_fid(s)) {
                     return Sw::REFERENCE_NOT_FOUND;
                 }
                 let mut meta = [0u8; 8];
-                let Some(n) = fs.meta_find(key_fid(s), &mut meta) else {
+                let Some(n) = fs.meta_find(key_fid(s).get(), &mut meta) else {
                     return Sw::REFERENCE_NOT_FOUND;
                 };
                 if n < 4 {
@@ -715,14 +715,14 @@ impl PivApplet<'_> {
             return Sw::MEMORY_FAILURE;
         }
         let mut meta = [0u8; 8];
-        let Some(n) = fs.meta_find(key_fid(SLOT_CARDMGM), &mut meta) else {
+        let Some(n) = fs.meta_find(key_fid(SLOT_CARDMGM).get(), &mut meta) else {
             return Sw::REFERENCE_NOT_FOUND;
         };
         if n < 3 {
             return Sw::REFERENCE_NOT_FOUND;
         }
         if fs
-            .meta_add(key_fid(SLOT_CARDMGM), &[algo, meta[1], touch])
+            .meta_add(key_fid(SLOT_CARDMGM).get(), &[algo, meta[1], touch])
             .is_err()
         {
             return Sw::MEMORY_FAILURE;
@@ -749,12 +749,15 @@ impl PivApplet<'_> {
         // The sealed blob is bound to the device, not the fid, so it moves
         // verbatim.
         let mut blob = [0u8; 300];
-        let Some(blob_n) = fs.read(key_fid(from), &mut blob) else {
+        let Some(blob_n) = fs.read_key(key_fid(from), &mut blob) else {
             return Sw::FILE_NOT_FOUND;
         };
         let (cert_from, cert_to) = (cert_fid_for_slot(from), cert_fid_for_slot(to));
         if to != 0xFF {
-            if fs.put(key_fid(to), &blob[..blob_n]).is_err() {
+            if fs
+                .put_key(key_fid(to), Sealed::wrap(&blob[..blob_n]))
+                .is_err()
+            {
                 blob.zeroize();
                 return Sw::MEMORY_FAILURE;
             }
@@ -769,24 +772,24 @@ impl PivApplet<'_> {
                 let _ = fs.delete(tofid);
             }
             let mut meta = [0u8; 8];
-            match fs.meta_find(key_fid(from), &mut meta) {
+            match fs.meta_find(key_fid(from).get(), &mut meta) {
                 Some(n) => {
-                    if fs.meta_add(key_fid(to), &meta[..n]).is_err() {
+                    if fs.meta_add(key_fid(to).get(), &meta[..n]).is_err() {
                         blob.zeroize();
                         return Sw::MEMORY_FAILURE;
                     }
                 }
                 None => {
-                    let _ = fs.meta_delete(key_fid(to));
+                    let _ = fs.meta_delete(key_fid(to).get());
                 }
             }
         }
         blob.zeroize();
-        let _ = fs.delete(key_fid(from));
+        let _ = fs.delete_key(key_fid(from));
         if let Some(f) = cert_from {
             let _ = fs.delete(f);
         }
-        let _ = fs.meta_delete(key_fid(from));
+        let _ = fs.meta_delete(key_fid(from).get());
         Sw::OK
     }
 }
@@ -2080,7 +2083,7 @@ mod tests {
         assert_eq!(sw, Sw::OK);
         // The raw file must not contain the scalar (GCM-sealed).
         let mut blob = [0u8; 300];
-        let n = fs.read(key_fid(0x9D), &mut blob).unwrap();
+        let n = fs.read_key(key_fid(0x9D), &mut blob).unwrap();
         assert!(n > 32);
         assert!(!blob[..n].windows(32).any(|w| w == scalar));
     }

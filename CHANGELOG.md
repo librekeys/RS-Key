@@ -13,6 +13,25 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
 
 ## [Unreleased]
 
+### Security
+
+- **OATH credential secrets are now sealed at rest.** Every other applet
+  (FIDO, PIV, OpenPGP, rescue) AES-encrypts its keys before they reach flash;
+  OATH alone stored its TOTP/HOTP shared secrets — and the SET CODE key — as
+  plaintext TLV. They are now AES-256-GCM-sealed under the device `kbase`
+  (`HKDF(serial_hash, kbase, "OATH/KEYS")`), the same device-seal the PIV slot
+  keys use. A one-time boot migration re-seals any credential enrolled before
+  this release, so existing accounts keep working. With the OTP MKEK burned, an
+  extracted flash image no longer reveals OATH secrets. `bcdDevice` `0x0765` →
+  `0x0766`.
+- **The at-rest seal path is now enforced by types, not convention.** A slot
+  that holds a sealed secret is a `KeyFid`, distinct from a plaintext `u16` file
+  id, and the only writer that accepts one is `Fs::put_key(KeyFid, Sealed)` —
+  where `Sealed` is produced only by a seal routine. A stray
+  `fs.put(key_fid, raw_secret)` no longer compiles (asserted by a `compile_fail`
+  doctest). This is the chokepoint whose absence let OATH ship its secrets in
+  the clear; every applet's key FIDs were moved onto it.
+
 ## [0.2.3] — 2026-06-18
 
 ### Changed

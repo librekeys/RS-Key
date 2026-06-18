@@ -233,6 +233,7 @@ async fn main(_spawner: Spawner) {
     let _ = rsk_fido::seed::migrate_keydev_boot(&dev, &mut fs);
     rsk_rescue::keydev::migrate_kbase(&dev, &mut fs);
     rsk_piv::migrate_kbase(&dev, &mut fs, &mut rng);
+    rsk_oath::migrate_seal(&dev, &mut fs, &mut rng);
     let _ = rsk_fido::seed::ensure_seed(&dev, &mut fs, &mut rng);
     let _ = rsk_openpgp::scan_files(&dev, &mut fs, &mut rng);
     vendor::load_led_config(&mut fs);
@@ -250,7 +251,7 @@ async fn main(_spawner: Spawner) {
     config.serial_number = Some("rs-key-0001");
     config.max_power = 100;
     config.max_packet_size_0 = 64;
-    config.device_release = 0x0765; // bcdDevice: our build counter
+    config.device_release = 0x0766; // bcdDevice: our build counter
 
     let mut builder = Builder::new(
         driver,

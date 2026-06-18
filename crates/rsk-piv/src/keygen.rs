@@ -143,7 +143,10 @@ pub(crate) fn generate_ec<S: Storage>(
     }
     let pol = resolved_policies(slot, req.pin_policy, req.touch_policy);
     if fs
-        .meta_add(key_fid(slot), &[req.algo, pol[0], pol[1], ORIGIN_GENERATED])
+        .meta_add(
+            key_fid(slot).get(),
+            &[req.algo, pol[0], pol[1], ORIGIN_GENERATED],
+        )
         .is_err()
     {
         return Sw::MEMORY_FAILURE;
@@ -186,7 +189,10 @@ pub(crate) fn finish_rsa<S: Storage>(
         return sw;
     }
     if fs
-        .meta_add(key_fid(slot), &[algo, pol[0], pol[1], ORIGIN_GENERATED])
+        .meta_add(
+            key_fid(slot).get(),
+            &[algo, pol[0], pol[1], ORIGIN_GENERATED],
+        )
         .is_err()
     {
         return Sw::MEMORY_FAILURE;
@@ -292,7 +298,10 @@ pub(crate) fn import<S: Storage>(
     }
     let pol = resolved_policies(slot, pin_policy, touch_policy);
     if fs
-        .meta_add(key_fid(slot), &[algo, pol[0], pol[1], ORIGIN_IMPORTED])
+        .meta_add(
+            key_fid(slot).get(),
+            &[algo, pol[0], pol[1], ORIGIN_IMPORTED],
+        )
         .is_err()
     {
         return Sw::MEMORY_FAILURE;
@@ -313,11 +322,11 @@ pub(crate) fn attest<S: Storage>(
     if !is_key(slot) {
         return Sw::REFERENCE_NOT_FOUND;
     }
-    if !fs.has_data(key_fid(slot)) {
+    if !fs.has_key(key_fid(slot)) {
         return Sw::REFERENCE_NOT_FOUND;
     }
     let mut meta = [0u8; 8];
-    let Some(meta_len) = fs.meta_find(key_fid(slot), &mut meta) else {
+    let Some(meta_len) = fs.meta_find(key_fid(slot).get(), &mut meta) else {
         return Sw::REFERENCE_NOT_FOUND;
     };
     if meta_len < 4 || meta[3] != ORIGIN_GENERATED {

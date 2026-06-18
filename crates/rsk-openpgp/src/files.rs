@@ -65,6 +65,17 @@ pub enum DoSource {
 
 /// Resolve a DO tag / FID to its source.
 pub fn source(fid: u16) -> DoSource {
+    // Private-key and DEK slots are `KeyFid`s (sealed secrets), so they can't be
+    // `u16` match patterns; like the other internal EFs they aren't GET-DATA-able.
+    if fid == EF_PK_SIG.get()
+        || fid == EF_PK_DEC.get()
+        || fid == EF_PK_AUT.get()
+        || fid == EF_DEK_PW1.get()
+        || fid == EF_DEK_RC.get()
+        || fid == EF_DEK_PW3.get()
+    {
+        return DoSource::Internal;
+    }
     match fid {
         EF_FULL_AID => DoSource::FullAid,
         EF_HIST_BYTES => DoSource::Rom(HISTORICAL_BYTES),
@@ -90,11 +101,12 @@ pub fn source(fid: u16) -> DoSource {
         | EF_TS_DEC | EF_TS_AUT | EF_UIF_SIG | EF_UIF_DEC | EF_UIF_AUT | EF_KDF | EF_RESET_CODE
         | EF_PRIV_DO_1 | EF_PRIV_DO_2 | EF_PRIV_DO_3 | EF_PRIV_DO_4 => DoSource::Flash,
 
-        // Internal EFs (keys, PINs, DEK, algo-priv, chaining): not GET-DATA-able.
+        // Internal EFs (PINs, public-key DOs, base/PWPIV DEK, algo-priv,
+        // chaining): not GET-DATA-able. The private-key + PW-DEK slots are
+        // handled by the KeyFid guard above.
         EF_PW1 | EF_RC | EF_PW3 | EF_ALGO_PRIV1 | EF_ALGO_PRIV2 | EF_ALGO_PRIV3 | EF_PW_PRIV
-        | EF_PW_RETRIES | EF_PK_SIG | EF_PK_DEC | EF_PK_AUT | EF_PB_SIG | EF_PB_DEC | EF_PB_AUT
-        | EF_DEK | EF_DEK_PW1 | EF_DEK_RC | EF_DEK_PW3 | EF_DEK_PWPIV | EF_CH_1 | EF_CH_2
-        | EF_CH_3 => DoSource::Internal,
+        | EF_PW_RETRIES | EF_PB_SIG | EF_PB_DEC | EF_PB_AUT | EF_DEK | EF_DEK_PWPIV | EF_CH_1
+        | EF_CH_2 | EF_CH_3 => DoSource::Internal,
 
         _ => DoSource::None,
     }

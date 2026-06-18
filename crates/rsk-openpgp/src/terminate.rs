@@ -19,6 +19,17 @@ use crate::init::scan_files;
 /// with FIDO (FIDO `EF_PIN` 0x1080 falls between OpenPGP PW1 0x1081 and FIDO 0x1090),
 /// so those are an explicit set — never a range. Verified disjoint from `is_fido_fid`.
 pub fn is_openpgp_fid(fid: u16) -> bool {
+    // Private-key + PW-DEK slots are `KeyFid`s (sealed secrets), so they can't be
+    // `u16` match patterns — compare their raw FIDs explicitly.
+    if fid == EF_PK_SIG.get()
+        || fid == EF_PK_DEC.get()
+        || fid == EF_PK_AUT.get()
+        || fid == EF_DEK_PW1.get()
+        || fid == EF_DEK_RC.get()
+        || fid == EF_DEK_PW3.get()
+    {
+        return true;
+    }
     (0x0001..0x0200).contains(&fid)
         || (0x5f00..0x6000).contains(&fid)
         || (0x7f00..0x8000).contains(&fid)
@@ -32,16 +43,10 @@ pub fn is_openpgp_fid(fid: u16) -> bool {
                 | EF_ALGO_PRIV3
                 | EF_PW_PRIV
                 | EF_PW_RETRIES
-                | EF_PK_SIG
-                | EF_PK_DEC
-                | EF_PK_AUT
                 | EF_PB_SIG
                 | EF_PB_DEC
                 | EF_PB_AUT
                 | EF_DEK
-                | EF_DEK_PW1
-                | EF_DEK_RC
-                | EF_DEK_PW3
                 | EF_DEK_PWPIV
                 | EF_CH_1
                 | EF_CH_2
@@ -149,7 +154,7 @@ mod tests {
         for fid in [
             EF_PW1,
             EF_PW3,
-            EF_PK_SIG,
+            EF_PK_SIG.get(),
             EF_DEK,
             EF_LOGIN_DATA,
             EF_FP,
@@ -169,7 +174,7 @@ mod tests {
     fn terminate_wipes_openpgp_and_reseeds() {
         let mut fs = seeded();
         // User data that a terminate must erase.
-        fs.put(EF_PK_SIG, &[0xAB; 40]).unwrap();
+        fs.put(EF_PK_SIG.get(), &[0xAB; 40]).unwrap();
         fs.put(EF_LOGIN_DATA, b"alice").unwrap();
         // A FIDO file sharing the Fs must SURVIVE (0x1080 = FIDO EF_PIN).
         fs.put(0x1080, &[8, 4, 1, 0, 0]).unwrap();
@@ -179,14 +184,14 @@ mod tests {
             Sw::OK
         );
 
-        assert!(!fs.has_data(EF_PK_SIG), "imported key must be wiped");
+        assert!(!fs.has_data(EF_PK_SIG.get()), "imported key must be wiped");
         assert!(!fs.has_data(EF_LOGIN_DATA), "login data must be wiped");
         assert!(
             fs.has_data(0x1080),
             "FIDO file must survive an OpenPGP terminate"
         );
         // Defaults re-seeded.
-        assert!(fs.has_data(EF_DEK_PW1));
+        assert!(fs.has_data(EF_DEK_PW1.get()));
         let mut pw = [0u8; 7];
         fs.read(EF_PW_PRIV, &mut pw);
         assert_eq!(pw[0], 0x01);
@@ -200,7 +205,7 @@ mod tests {
             terminate_df(&dev(), &mut fs, &mut CountRng(0), false, &apdu()),
             Sw::SECURITY_STATUS_NOT_SATISFIED
         );
-        assert!(fs.has_data(EF_DEK_PW1), "nothing wiped on refusal");
+        assert!(fs.has_data(EF_DEK_PW1.get()), "nothing wiped on refusal");
     }
 
     #[test]

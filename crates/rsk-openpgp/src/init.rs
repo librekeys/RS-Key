@@ -8,7 +8,7 @@
 use zeroize::Zeroize;
 
 use rsk_crypto::{Device, PinKdf};
-use rsk_fs::{Fs, Storage};
+use rsk_fs::{Fs, Sealed, Storage};
 
 use crate::Rng;
 use crate::consts::*;
@@ -60,9 +60,9 @@ pub fn scan_files<S: Storage>(
 ) -> Result<(), Error> {
     // DEK: generate once when none of the wrapped copies exist.
     let mut reset_dek = false;
-    if !fs.has_data(EF_DEK_PW1)
-        && !fs.has_data(EF_DEK_RC)
-        && !fs.has_data(EF_DEK_PW3)
+    if !fs.has_key(EF_DEK_PW1)
+        && !fs.has_key(EF_DEK_RC)
+        && !fs.has_key(EF_DEK_PW3)
         && !fs.has_data(EF_DEK)
     {
         let mut random_dek = [0u8; DEK_SIZE];
@@ -76,14 +76,17 @@ pub fn scan_files<S: Storage>(
         rng.fill(&mut nonce);
         dev.encrypt_with_aad(&session_pw1, &random_dek, PinKdf::V2, &nonce, &mut def[1..])
             .map_err(|_| Error::Crypto)?;
-        put(fs, EF_DEK_PW1, &def)?;
+        fs.put_key(EF_DEK_PW1, Sealed::wrap(&def))
+            .map_err(|_| Error::Storage)?;
 
         // RC and PW3 share one blob sealed under the PW3 session.
         rng.fill(&mut nonce);
         dev.encrypt_with_aad(&session_pw3, &random_dek, PinKdf::V2, &nonce, &mut def[1..])
             .map_err(|_| Error::Crypto)?;
-        put(fs, EF_DEK_RC, &def)?;
-        put(fs, EF_DEK_PW3, &def)?;
+        fs.put_key(EF_DEK_RC, Sealed::wrap(&def))
+            .map_err(|_| Error::Storage)?;
+        fs.put_key(EF_DEK_PW3, Sealed::wrap(&def))
+            .map_err(|_| Error::Storage)?;
 
         random_dek.zeroize();
         session_pw1.zeroize();
@@ -162,9 +165,9 @@ mod tests {
 
         // DEK files are 77 bytes, format byte 0x03.
         for fid in [EF_DEK_PW1, EF_DEK_RC, EF_DEK_PW3] {
-            assert_eq!(fs.size(fid), Some(DEK_FILE_SIZE));
+            assert_eq!(fs.size(fid.get()), Some(DEK_FILE_SIZE));
             let mut b = [0u8; 1];
-            fs.read(fid, &mut b);
+            fs.read(fid.get(), &mut b);
             assert_eq!(b[0], FORMAT_V3);
         }
         // PIN verifiers: [len, 1, verifier(32)].
@@ -193,7 +196,7 @@ mod tests {
 
         // The wrapped DEK is recoverable with the default PW1 session key.
         let mut blob = [0u8; DEK_FILE_SIZE];
-        let n = fs.read(EF_DEK_PW1, &mut blob).unwrap();
+        let n = fs.read(EF_DEK_PW1.get(), &mut blob).unwrap();
         assert_eq!(blob[0], FORMAT_V3);
         let session = d.pin_derive_session(PW1_DEFAULT);
         let mut dek = [0u8; DEK_SIZE];
@@ -203,7 +206,7 @@ mod tests {
         assert_eq!(m, DEK_SIZE);
         // RC and PW3 are the same blob sealed under PW3 and decrypt to the same DEK.
         let mut blob3 = [0u8; DEK_FILE_SIZE];
-        fs.read(EF_DEK_PW3, &mut blob3);
+        fs.read(EF_DEK_PW3.get(), &mut blob3);
         let session3 = d.pin_derive_session(PW3_DEFAULT);
         let mut dek3 = [0u8; DEK_SIZE];
         d.decrypt_with_aad(&session3, &blob3[1..], PinKdf::V2, &mut dek3)
@@ -216,11 +219,11 @@ mod tests {
         let mut fs = fresh();
         scan_files(&dev(), &mut fs, &mut CountRng(0)).unwrap();
         let mut first = [0u8; DEK_FILE_SIZE];
-        fs.read(EF_DEK_PW1, &mut first);
+        fs.read(EF_DEK_PW1.get(), &mut first);
         // A second run with a different RNG must not rewrite existing files.
         scan_files(&dev(), &mut fs, &mut CountRng(200)).unwrap();
         let mut second = [0u8; DEK_FILE_SIZE];
-        fs.read(EF_DEK_PW1, &mut second);
+        fs.read(EF_DEK_PW1.get(), &mut second);
         assert_eq!(first, second);
     }
 }

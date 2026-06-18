@@ -11,7 +11,7 @@
 use rsa::traits::PrivateKeyParts;
 use rsa::{BigUint, RsaPrivateKey};
 use rsk_crypto::{Device, aes256gcm_decrypt, aes256gcm_encrypt, hkdf_sha256};
-use rsk_fs::{Fs, Storage};
+use rsk_fs::{Fs, KeyFid, Sealed, Storage};
 use rsk_openpgp::Rng;
 use rsk_openpgp::keys::{Curve, PrivKey};
 use rsk_sdk::Sw;
@@ -40,7 +40,7 @@ pub fn seal_put<S: Storage>(
     dev: &Device,
     fs: &mut Fs<S>,
     rng: &mut dyn Rng,
-    fid: u16,
+    fid: KeyFid,
     plain: &[u8],
 ) -> Result<(), Sw> {
     if plain.len() > MAX_PLAIN {
@@ -61,7 +61,9 @@ pub fn seal_put<S: Storage>(
     );
     key.zeroize();
     blob[NONCE_LEN + plain.len()..n].copy_from_slice(&tag);
-    let r = fs.put(fid, &blob[..n]).map_err(|_| Sw::MEMORY_FAILURE);
+    let r = fs
+        .put_key(fid, Sealed::wrap(&blob[..n]))
+        .map_err(|_| Sw::MEMORY_FAILURE);
     blob.zeroize();
     r
 }
@@ -71,11 +73,11 @@ pub fn seal_put<S: Storage>(
 pub fn seal_read<S: Storage>(
     dev: &Device,
     fs: &mut Fs<S>,
-    fid: u16,
+    fid: KeyFid,
     out: &mut [u8],
 ) -> Result<usize, Sw> {
     let mut blob = [0u8; MAX_BLOB];
-    let n = fs.read(fid, &mut blob).ok_or(Sw::REFERENCE_NOT_FOUND)?;
+    let n = fs.read_key(fid, &mut blob).ok_or(Sw::REFERENCE_NOT_FOUND)?;
     if !(NONCE_LEN + TAG_LEN..=MAX_BLOB).contains(&n) {
         return Err(Sw::MEMORY_FAILURE);
     }
@@ -120,7 +122,7 @@ pub fn migrate_kbase<S: Storage>(dev: &Device, fs: &mut Fs<S>, rng: &mut dyn Rng
     let slots = (0x82..=0x95).chain(0x9A..=0x9E).chain([0xF9u8]);
     for slot in slots {
         let fid = crate::files::key_fid(slot);
-        if !fs.has_data(fid) {
+        if !fs.has_key(fid) {
             continue;
         }
         let mut plain = [0u8; MAX_PLAIN];
@@ -140,7 +142,7 @@ pub fn store_ec_key<S: Storage>(
     dev: &Device,
     fs: &mut Fs<S>,
     rng: &mut dyn Rng,
-    fid: u16,
+    fid: KeyFid,
     key: &PrivKey,
 ) -> Result<(), Sw> {
     let scalar = key.scalar();
@@ -153,7 +155,7 @@ pub fn store_ec_key<S: Storage>(
 }
 
 /// Load an EC key sealed by [`store_ec_key`].
-pub fn load_ec_key<S: Storage>(dev: &Device, fs: &mut Fs<S>, fid: u16) -> Result<PrivKey, Sw> {
+pub fn load_ec_key<S: Storage>(dev: &Device, fs: &mut Fs<S>, fid: KeyFid) -> Result<PrivKey, Sw> {
     let mut plain = [0u8; 1 + 66];
     let n = seal_read(dev, fs, fid, &mut plain)?;
     let r = (|| {
@@ -172,7 +174,7 @@ pub fn store_rsa_key<S: Storage>(
     dev: &Device,
     fs: &mut Fs<S>,
     rng: &mut dyn Rng,
-    fid: u16,
+    fid: KeyFid,
     key: &RsaPrivateKey,
 ) -> Result<(), Sw> {
     let primes = key.primes();
@@ -202,7 +204,7 @@ pub fn store_rsa_key<S: Storage>(
 pub fn load_rsa_key<S: Storage>(
     dev: &Device,
     fs: &mut Fs<S>,
-    fid: u16,
+    fid: KeyFid,
 ) -> Result<RsaPrivateKey, Sw> {
     let mut plain = [0u8; MAX_PLAIN];
     let n = seal_read(dev, fs, fid, &mut plain)?;

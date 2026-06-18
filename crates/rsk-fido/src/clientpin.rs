@@ -1124,7 +1124,7 @@ mod tests {
         let pin_hash = sha256(b"9246");
         crate::seed::wrap_keydev_legacy(&dev(), &mut fs, &pin_hash[..16]);
         let mut raw = [0u8; 61];
-        assert_eq!(fs.read(EF_KEY_DEV, &mut raw), Some(61));
+        assert_eq!(fs.read(EF_KEY_DEV.get(), &mut raw), Some(61));
         assert_eq!(raw[0], 0x03);
 
         // The OTP build: first verify migrates the verifier and unwraps the
@@ -1143,7 +1143,7 @@ mod tests {
         let mut pin_rec = [0u8; PIN_FILE_LEN];
         ctx.fs.read(EF_PIN, &mut pin_rec).unwrap();
         assert_eq!(pin_rec[0], MAX_PIN_RETRIES);
-        assert_eq!(ctx.fs.read(EF_KEY_DEV, &mut raw), Some(33));
+        assert_eq!(ctx.fs.read(EF_KEY_DEV.get(), &mut raw), Some(33));
         assert_eq!(raw[0], 0x11);
         assert_eq!(load_keydev(&otp_dev(), ctx.fs), Some(seed0));
 
