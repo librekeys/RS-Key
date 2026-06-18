@@ -13,6 +13,8 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-06-18
+
 ### Changed
 
 - **LED turns green (idle) as soon as the host configures the device**, instead
