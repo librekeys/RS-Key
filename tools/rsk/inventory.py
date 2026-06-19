@@ -26,7 +26,7 @@ import sys
 from . import ccid, ctaphid
 from .audit import AUDIT_CHECKPOINT, CKPT_TAG
 from .backup import _gated, _vendor
-from .common import connect_fido, die
+from .common import add_pin_arg, connect_fido, device_has_pin, die, resolve_pin
 from .status import RESCUE_AID, VENDOR_STATE, _fw
 
 ATT_STATE = 11  # vendor: org-attestation state (ungated)
@@ -41,7 +41,7 @@ def register(sub):
     ls.set_defaults(func=cmd_list)
 
     v = g.add_parser("verify", help="challenge-response vs the enrolled attestation key")
-    v.add_argument("--pin", help="FIDO2 PIN (required if one is set)")
+    add_pin_arg(v)
     v.add_argument("--expect-key",
                    help="expected identity: 16-hex fingerprint or full hex SEC1 pubkey")
     v.set_defaults(func=cmd_verify)
@@ -189,12 +189,13 @@ def cmd_list(args):
 
 def cmd_verify(args):
     dev, cid = connect_fido()
+    pin = resolve_pin(args, has_pin=device_has_pin(dev, cid))
     challenge = os.urandom(16)
     print("touch the device (BOOTSEL) to sign the challenge…", file=sys.stderr)
     st, m = _vendor(dev, cid,
-                    _gated(AUDIT_CHECKPOINT, {1: challenge}, dev, cid, args.pin))
+                    _gated(AUDIT_CHECKPOINT, {1: challenge}, dev, cid, pin))
     if st == 0x36:
-        die("device requires a PIN — pass --pin")
+        die("device requires a PIN — pass --pin or enter it when prompted")
     if st == 0x30:
         die("refused — no OTP DEVK provisioned (see docs/production.md)")
     if st == 0x27:

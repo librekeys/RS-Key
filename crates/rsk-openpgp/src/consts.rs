@@ -4,6 +4,8 @@
 //! OpenPGP applet constants: AID/ATR, instruction bytes, EF/DO FIDs, PIN modes,
 //! and DEK sizing.
 
+use rsk_fs::KeyFid;
+
 /// OpenPGP application identifier.
 pub const OPENPGP_AID: &[u8] = &[0xD2, 0x76, 0x00, 0x01, 0x24, 0x01];
 
@@ -60,16 +62,16 @@ pub const EF_ALGO_PRIV2: u16 = 0x10c2;
 pub const EF_ALGO_PRIV3: u16 = 0x10c3;
 pub const EF_PW_PRIV: u16 = 0x10c4;
 pub const EF_PW_RETRIES: u16 = 0x10c5;
-pub const EF_PK_SIG: u16 = 0x10d1;
-pub const EF_PK_DEC: u16 = 0x10d2;
-pub const EF_PK_AUT: u16 = 0x10d3;
-pub const EF_PB_SIG: u16 = 0x10d4;
+pub const EF_PK_SIG: KeyFid = KeyFid::new(0x10d1); // private SIG key, DEK-sealed
+pub const EF_PK_DEC: KeyFid = KeyFid::new(0x10d2); // private DEC key, DEK-sealed
+pub const EF_PK_AUT: KeyFid = KeyFid::new(0x10d3); // private AUT key, DEK-sealed
+pub const EF_PB_SIG: u16 = 0x10d4; // public-key DO = EF_PK_SIG + 3 (not secret)
 pub const EF_PB_DEC: u16 = 0x10d5;
 pub const EF_PB_AUT: u16 = 0x10d6;
 pub const EF_DEK: u16 = 0x1099;
-pub const EF_DEK_PW1: u16 = 0x109a;
-pub const EF_DEK_RC: u16 = 0x109b;
-pub const EF_DEK_PW3: u16 = 0x109c;
+pub const EF_DEK_PW1: KeyFid = KeyFid::new(0x109a); // DEK wrapped under PW1
+pub const EF_DEK_RC: KeyFid = KeyFid::new(0x109b); // DEK wrapped under reset code
+pub const EF_DEK_PW3: KeyFid = KeyFid::new(0x109c); // DEK wrapped under PW3
 pub const EF_DEK_PWPIV: u16 = 0x109d;
 pub const EF_CH_1: u16 = 0x1f21;
 pub const EF_CH_2: u16 = 0x1f22;
@@ -104,7 +106,7 @@ pub const EF_TS_SIG: u16 = 0x00ce; // S
 pub const EF_TS_DEC: u16 = 0x00cf; // S
 pub const EF_TS_AUT: u16 = 0x00d0; // S
 pub const EF_RESET_CODE: u16 = 0x00d3; // S — PUT redirects to EF_RC
-pub const EF_AES_KEY: u16 = 0x00d5; // S — symmetric key for DEC slot
+pub const EF_AES_KEY: KeyFid = KeyFid::new(0x00d5); // S — symmetric key for DEC slot, DEK-sealed
 pub const EF_UIF_SIG: u16 = 0x00d6; // S — user-interaction flag (touch)
 pub const EF_UIF_DEC: u16 = 0x00d7; // S
 pub const EF_UIF_AUT: u16 = 0x00d8; // S

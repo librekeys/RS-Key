@@ -12,7 +12,7 @@ use zeroize::Zeroize;
 
 use rsk_crypto::Device;
 use rsk_crypto::aes::{aes_decrypt_cfb_256, aes_encrypt_cfb_256};
-use rsk_fs::{Fs, Storage};
+use rsk_fs::{Fs, KeyFid, Sealed, Storage};
 use rsk_sdk::Sw;
 
 use p256::ecdsa::signature::hazmat::PrehashSigner;
@@ -478,7 +478,7 @@ pub fn store_ec_key<S: Storage>(
     dev: &Device,
     fs: &mut Fs<S>,
     sess: &Session,
-    fid: u16,
+    fid: KeyFid,
     key: &PrivKey,
 ) -> Result<(), Sw> {
     let scalar = key.scalar();
@@ -488,7 +488,8 @@ pub fn store_ec_key<S: Storage>(
     kdata[1..n].copy_from_slice(scalar);
     let r = (|| {
         dek_encrypt(dev, fs, sess, &mut kdata[..n])?;
-        fs.put(fid, &kdata[..n]).map_err(|_| Sw::MEMORY_FAILURE)
+        fs.put_key(fid, Sealed::wrap(&kdata[..n]))
+            .map_err(|_| Sw::MEMORY_FAILURE)
     })();
     kdata.zeroize();
     r
@@ -499,10 +500,12 @@ pub fn load_ec_key<S: Storage>(
     dev: &Device,
     fs: &mut Fs<S>,
     sess: &Session,
-    fid: u16,
+    fid: KeyFid,
 ) -> Result<PrivKey, Sw> {
     let mut kdata = [0u8; MAX_EC_KDATA];
-    let n = fs.read(fid, &mut kdata).ok_or(Sw::REFERENCE_NOT_FOUND)?;
+    let n = fs
+        .read_key(fid, &mut kdata)
+        .ok_or(Sw::REFERENCE_NOT_FOUND)?;
     if n < 2 {
         return Err(WRONG_DATA);
     }
@@ -555,7 +558,8 @@ pub fn store_aes_key<S: Storage>(
     let mut kdata = *key;
     let r = (|| {
         dek_encrypt(dev, fs, sess, &mut kdata)?;
-        fs.put(EF_AES_KEY, &kdata).map_err(|_| Sw::MEMORY_FAILURE)
+        fs.put_key(EF_AES_KEY, Sealed::wrap(&kdata))
+            .map_err(|_| Sw::MEMORY_FAILURE)
     })();
     kdata.zeroize();
     r
@@ -571,7 +575,7 @@ pub fn load_aes_key<S: Storage>(
 ) -> Result<([u8; 32], usize), Sw> {
     let mut kdata = [0u8; 32];
     let n = fs
-        .read(EF_AES_KEY, &mut kdata)
+        .read_key(EF_AES_KEY, &mut kdata)
         .filter(|&n| n > 0)
         .ok_or(Sw::REFERENCE_NOT_FOUND)?;
     if let Err(e) = dek_decrypt(dev, fs, sess, &mut kdata[..n]) {
@@ -867,7 +871,7 @@ pub fn store_rsa_key<S: Storage>(
     dev: &Device,
     fs: &mut Fs<S>,
     sess: &Session,
-    fid: u16,
+    fid: KeyFid,
     key: &RsaPrivateKey,
 ) -> Result<(), Sw> {
     let primes = key.primes();
@@ -890,7 +894,8 @@ pub fn store_rsa_key<S: Storage>(
     qb.zeroize();
     let r = (|| {
         dek_encrypt(dev, fs, sess, &mut kdata[..n])?;
-        fs.put(fid, &kdata[..n]).map_err(|_| Sw::MEMORY_FAILURE)
+        fs.put_key(fid, Sealed::wrap(&kdata[..n]))
+            .map_err(|_| Sw::MEMORY_FAILURE)
     })();
     kdata.zeroize();
     r
@@ -902,10 +907,12 @@ pub fn load_rsa_key<S: Storage>(
     dev: &Device,
     fs: &mut Fs<S>,
     sess: &Session,
-    fid: u16,
+    fid: KeyFid,
 ) -> Result<RsaPrivateKey, Sw> {
     let mut kdata = [0u8; MAX_RSA_KDATA];
-    let n = fs.read(fid, &mut kdata).ok_or(Sw::REFERENCE_NOT_FOUND)?;
+    let n = fs
+        .read_key(fid, &mut kdata)
+        .ok_or(Sw::REFERENCE_NOT_FOUND)?;
     if n < 2 || n % 2 != 0 {
         kdata.zeroize();
         return Err(WRONG_DATA);

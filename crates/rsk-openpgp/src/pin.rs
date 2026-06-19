@@ -8,7 +8,7 @@
 use zeroize::Zeroize;
 
 use rsk_crypto::{Device, PinKdf};
-use rsk_fs::{Fs, Storage};
+use rsk_fs::{Fs, KeyFid, Sealed, Storage};
 use rsk_sdk::Sw;
 
 use crate::Rng;
@@ -27,9 +27,9 @@ pub struct Session {
     /// the DEC / AUT slots; MANAGE SECURITY ENVIRONMENT (0x22) can repoint them,
     /// and a deselect resets them.
     pub algo_dec: u16,
-    pub pk_dec: u16,
+    pub pk_dec: KeyFid,
     pub algo_aut: u16,
-    pub pk_aut: u16,
+    pub pk_aut: KeyFid,
     /// Cardholder-certificate occurrence (0/1/2) selected by SELECT DATA,
     /// picking `EF_CH_1/2/3` for GET/PUT DATA of DO 7F21. Reset on deselect.
     pub cert_occ: u8,
@@ -217,7 +217,7 @@ fn migrate_pin_kbase<S: Storage>(
         _ => return Err(Sw::EXEC_ERROR),
     };
     let mut blob = [0u8; DEK_FILE_SIZE];
-    if let Some(n) = fs.read(dek_fid, &mut blob) {
+    if let Some(n) = fs.read_key(dek_fid, &mut blob) {
         if n < 1 || blob[0] != 0x03 {
             return Err(Sw::EXEC_ERROR);
         }
@@ -267,7 +267,7 @@ pub fn load_dek<S: Storage>(
         return Err(Sw::CONDITIONS_NOT_SATISFIED); // no PIN verified
     };
     let mut blob = [0u8; DEK_FILE_SIZE];
-    let n = fs.read(fid, &mut blob).ok_or(Sw::REFERENCE_NOT_FOUND)?;
+    let n = fs.read_key(fid, &mut blob).ok_or(Sw::REFERENCE_NOT_FOUND)?;
     if n < 1 || blob[0] != 0x03 {
         return Err(Sw::EXEC_ERROR);
     }
@@ -349,7 +349,7 @@ fn rewrap_dek<S: Storage>(
     dev: &Device,
     fs: &mut Fs<S>,
     rng: &mut dyn Rng,
-    dek_fid: u16,
+    dek_fid: KeyFid,
     pin: &[u8],
     dek: &[u8; DEK_SIZE],
 ) -> Result<[u8; 32], Sw> {
@@ -360,7 +360,9 @@ fn rewrap_dek<S: Storage>(
     rng.fill(&mut nonce);
     dev.encrypt_with_aad(&session, dek, PinKdf::V2, &nonce, &mut def[1..])
         .map_err(|_| Sw::EXEC_ERROR)?;
-    let r = fs.put(dek_fid, &def).map_err(|_| Sw::MEMORY_FAILURE);
+    let r = fs
+        .put_key(dek_fid, Sealed::wrap(&def))
+        .map_err(|_| Sw::MEMORY_FAILURE);
     def.zeroize();
     r.map(|()| session)
 }
@@ -510,7 +512,7 @@ pub fn put_reset_code<S: Storage>(
     }
     if data.is_empty() {
         let _ = fs.delete(EF_RC);
-        let _ = fs.delete(EF_DEK_RC);
+        let _ = fs.delete_key(EF_DEK_RC);
         sess.has_rc = false;
         return Sw::OK;
     }

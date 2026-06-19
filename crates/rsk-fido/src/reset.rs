@@ -62,20 +62,23 @@ pub fn reset<S: Storage, R: Rng>(ctx: &mut Ctx<S, R>) -> CtapResult {
 /// 0x10xx range (FIDO `EF_PIN` 0x1080 vs OpenPGP PW1 0x1081), so this is an
 /// explicit set plus the resident-credential ranges, not a range test.
 fn is_fido_fid(fid: u16) -> bool {
-    matches!(
-        fid,
-        EF_KEY_DEV
-            | EF_KEY_DEV_ENC
-            | EF_BACKUP_SEALED
-            | EF_EE_DEV
-            | EF_COUNTER
-            | EF_PIN
-            | EF_AUTHTOKEN
-            | EF_PAUTHTOKEN
-            | EF_MINPINLEN
-            | EF_LARGEBLOB
-            | EF_EA_ENABLED
-    ) || (EF_CRED..EF_CRED + MAX_RESIDENT_CREDENTIALS).contains(&fid)
+    // EF_KEY_DEV / EF_KEY_DEV_ENC are `KeyFid`s (sealed seed slots), so they
+    // can't sit in the `u16` match arm — compare their raw FIDs explicitly.
+    fid == EF_KEY_DEV.get()
+        || fid == EF_KEY_DEV_ENC.get()
+        || matches!(
+            fid,
+            EF_BACKUP_SEALED
+                | EF_EE_DEV
+                | EF_COUNTER
+                | EF_PIN
+                | EF_AUTHTOKEN
+                | EF_PAUTHTOKEN
+                | EF_MINPINLEN
+                | EF_LARGEBLOB
+                | EF_EA_ENABLED
+        )
+        || (EF_CRED..EF_CRED + MAX_RESIDENT_CREDENTIALS).contains(&fid)
         || (EF_RP..EF_RP + MAX_RESIDENT_CREDENTIALS).contains(&fid)
 }
 

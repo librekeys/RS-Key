@@ -104,6 +104,25 @@ nix develop -c cargo vet suggest      # diffs to review next
 The host `tools/tui` workspace is separate and not yet under cargo-vet; it is
 covered by Dependabot and `cargo-deny`.
 
+## Transparency-log monitoring
+
+The Rekor log that backs every signature above is tamper-*evident*, not
+tamper-*proof*: it records misuse, but only if someone looks. A scheduled
+workflow,
+[`rekor-monitor.yml`](https://github.com/TheMaxMur/RS-Key/blob/main/.github/workflows/rekor-monitor.yml),
+does the looking — every hour it runs
+[`sigstore/rekor-monitor`](https://github.com/sigstore/rekor-monitor) and files
+a GitHub issue listing any Rekor entry signed as an RS-Key GitHub-Actions
+identity (any `…/RS-Key/.github/workflows/*` subject under the GitHub OIDC
+issuer).
+
+This is the **detection** half that complements the **verification** above: the
+attestations prove a *legitimate* release is genuine, while the monitor surfaces
+an *illegitimate* signature — one made with our identity by something we didn't
+run (a compromised OIDC token, repo, or runner). Each real release adds a couple
+of expected entries from `release-build.yml`, so a known issue or two per release
+is normal; the alarm is an entry you don't recognise.
+
 ## What's deliberately *not* here
 
 - **No `cargo-vet` of a fully line-reviewed tree.** See the honest scope above.

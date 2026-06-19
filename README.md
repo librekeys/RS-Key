@@ -21,7 +21,7 @@ replacement for an audited commercial key.
 ## Project status
 
 A working, single-maintainer hobby project under active development. The latest
-tagged release is **v0.2.3**; day to day the supported version is the tip of
+tagged release is **v0.2.4**; day to day the supported version is the tip of
 `main`, and every behavior change bumps the USB `bcdDevice` build counter so a
 build can be named precisely. Most of the protocol surface works against real host software; what
 has actually been checked on hardware (with dates) is in
@@ -156,6 +156,11 @@ Inside the dev shell two commands are on `PATH`:
   `rsk secure-boot`, `rsk otp`, `rsk fido`, `rsk led`, `rsk reboot`, … (`rsk --help`)
 - **`rsk-tui`** — a terminal dashboard for day-to-day reads and a few in-band
   actions ([guide](docs/guides/tui.md); `rsk-tui --demo` needs no hardware)
+
+Without the dev shell, `rsk` also runs on a plain Python ≥ 3.9 toolchain via
+[uv](https://docs.astral.sh/uv/) or pip — `uvx --from ./tools rsk status`,
+`uv tool install ./tools`, or `pipx install ./tools`. Details and the native-lib
+notes are in [tools/README.md](tools/README.md).
 
 Separately, **`rsk-wipe`** is a RAM-only flash-erase *image* you flash
 deliberately to wipe a board for clean-slate testing — it is built and flashed

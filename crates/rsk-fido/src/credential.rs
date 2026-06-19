@@ -31,6 +31,9 @@ use crate::keyderiv::{KEY_HANDLE_LEN, verify_key};
 
 const CRED_PROTO: &[u8; 4] = b"\xf1\xd0\x02\x02";
 const CRED_PROTO_RESIDENT: &[u8; 4] = b"\xf1\xd0\x02\x03";
+/// Derive label for the EF_RP rpId box — domain-separated from the credential-id
+/// protos so the rpId box key can never coincide with a cred-box key.
+const RP_PROTO: &[u8] = b"RS-Key/EF_RP/rpId";
 const PROTO_LEN: usize = 4;
 const IV_LEN: usize = 12;
 const TAG_LEN: usize = 16;
@@ -404,6 +407,9 @@ pub fn derive_large_blob_key(seed: &[u8; 32], cred_id: &[u8]) -> [u8; 32] {
 /// A resident record is `rp_id_hash(32) ‖ resident_id(42) ‖ full_cred_id`.
 pub const RECORD_PREFIX: usize = 32 + CRED_RESIDENT_LEN;
 
+/// EF_RP head before the (boxed) rpId tail: `count(1) ‖ rpIdHash(32)`.
+pub(crate) const RP_PREFIX: usize = 1 + 32;
+
 /// Mark, in one storage pass, which slots `base+0..base+out.len()` hold a live
 /// record (`out[i]` is occupied iff a key `base+i` exists). One pass is
 /// O(items); per-slot `fs.read` probing is not — a `read` of an *absent* slot
@@ -473,13 +479,21 @@ pub fn credential_store<S: Storage>(
     fs.put(EF_CRED + slot, &rec[..total])?;
 
     if new_record {
-        bump_rp(fs, rp_id_hash, rp_id)?;
+        bump_rp(fs, seed, rp_id_hash, rp_id)?;
     }
     Ok(())
 }
 
 /// Increment the credential count for an rp, creating its EF_RP record if new.
-fn bump_rp<S: Storage>(fs: &mut Fs<S>, rp_id_hash: &[u8; 32], rp_id: &str) -> Result<()> {
+/// A new record's rpId domain is boxed under the device seed (see [`seal_rp_id`])
+/// so a flash dump never reveals the cleartext list of relying parties; the
+/// rpIdHash stays cleartext as the O(1) lookup key.
+fn bump_rp<S: Storage>(
+    fs: &mut Fs<S>,
+    seed: &[u8; 32],
+    rp_id_hash: &[u8; 32],
+    rp_id: &str,
+) -> Result<()> {
     let mut rec = [0u8; 256];
     let mut free: Option<u16> = None;
     let mut occupied = [false; MAX_RESIDENT_CREDENTIALS as usize];
@@ -493,24 +507,134 @@ fn bump_rp<S: Storage>(fs: &mut Fs<S>, rp_id_hash: &[u8; 32], rp_id: &str) -> Re
         }
         let fid = EF_RP + i;
         if let Some(n) = fs.read(fid, &mut rec)
-            && n >= 33
-            && rec[1..33] == *rp_id_hash
+            && n >= RP_PREFIX
+            && rec[1..RP_PREFIX] == *rp_id_hash
         {
+            // Existing rp: bump the count, re-storing the boxed tail verbatim.
             let n = n.min(rec.len());
             rec[0] = rec[0].saturating_add(1);
             return fs.put(fid, &rec[..n]);
         }
     }
     let slot = free.ok_or(Error::NoMemory)?;
+    rec[0] = 1;
+    rec[1..RP_PREFIX].copy_from_slice(rp_id_hash);
+    let blen = seal_rp_id(seed, rp_id, rp_id_hash, &mut rec[RP_PREFIX..])?;
+    fs.put(EF_RP + slot, &rec[..RP_PREFIX + blen])
+}
+
+/// Box the rpId domain under the device seed. Layout written to `out`:
+/// `iv(12) ‖ ciphertext ‖ poly1305_tag(16)`, ChaCha20-Poly1305 with the rpIdHash
+/// as AAD. The IV is *deterministic* — there is exactly one EF_RP record per
+/// rpIdHash and its plaintext (the domain) is immutable, so a fixed (key, iv)
+/// never encrypts two different messages, which is the only thing nonce reuse
+/// must avoid. Returns the box length.
+pub(crate) fn seal_rp_id(
+    seed: &[u8; 32],
+    rp_id: &str,
+    rp_id_hash: &[u8; 32],
+    out: &mut [u8],
+) -> Result<usize> {
     let id = rp_id.as_bytes();
-    let total = 1 + 32 + id.len();
-    if total > rec.len() {
+    let total = IV_LEN + id.len() + TAG_LEN;
+    if total > out.len() {
         return Err(Error::NoMemory);
     }
-    rec[0] = 1;
-    rec[1..33].copy_from_slice(rp_id_hash);
-    rec[33..total].copy_from_slice(id);
-    fs.put(EF_RP + slot, &rec[..total])
+    let mut key = derive_chacha_key(seed, RP_PROTO);
+    let iv_full = hmac_sha256(&key, rp_id_hash);
+    let mut iv = [0u8; IV_LEN];
+    iv.copy_from_slice(&iv_full[..IV_LEN]);
+    out[..IV_LEN].copy_from_slice(&iv);
+    out[IV_LEN..IV_LEN + id.len()].copy_from_slice(id);
+    let tag = chacha20poly1305_encrypt(&key, &iv, rp_id_hash, &mut out[IV_LEN..IV_LEN + id.len()]);
+    out[IV_LEN + id.len()..total].copy_from_slice(&tag);
+    key.zeroize();
+    Ok(total)
+}
+
+/// Recover the rpId domain from an EF_RP `tail`, whether it is a box (written by
+/// [`seal_rp_id`]) or a legacy cleartext domain. The recovered string is written
+/// into `out` and returned alongside a `was_boxed` flag (used by the boot
+/// migration to decide whether to re-box). Trial-decryption distinguishes the
+/// two formats: a cleartext domain fails the poly1305 check (probability of a
+/// false positive ≈ 2⁻¹²⁸).
+pub(crate) fn unseal_rp_id<'a>(
+    seed: &[u8; 32],
+    rp_id_hash: &[u8; 32],
+    tail: &[u8],
+    out: &'a mut [u8],
+) -> Option<(&'a str, bool)> {
+    let n = tail.len();
+    // A box is iv(12) ‖ ct ‖ tag(16): at least 28 bytes, and it authenticates.
+    if n >= IV_LEN + TAG_LEN && n <= out.len() {
+        let ct_len = n - IV_LEN - TAG_LEN;
+        let mut iv = [0u8; IV_LEN];
+        iv.copy_from_slice(&tail[..IV_LEN]);
+        let mut tag = [0u8; TAG_LEN];
+        tag.copy_from_slice(&tail[n - TAG_LEN..]);
+        out[..ct_len].copy_from_slice(&tail[IV_LEN..IV_LEN + ct_len]);
+        let mut key = derive_chacha_key(seed, RP_PROTO);
+        let ok = chacha20poly1305_decrypt(&key, &iv, rp_id_hash, &mut out[..ct_len], &tag).is_ok();
+        key.zeroize();
+        if ok {
+            return core::str::from_utf8(&out[..ct_len]).ok().map(|s| (s, true));
+        }
+    }
+    // Legacy cleartext domain (the failed decrypt above left `out` garbled, so
+    // re-copy the raw tail here).
+    if n <= out.len() {
+        out[..n].copy_from_slice(tail);
+        return core::str::from_utf8(&out[..n]).ok().map(|s| (s, false));
+    }
+    None
+}
+
+/// Boot pass: re-box any legacy cleartext EF_RP record so a flash dump no longer
+/// reveals the cleartext list of relying parties. Idempotent and crash-safe —
+/// already-boxed records authenticate and are skipped, and a partially-migrated
+/// set converges over boots. Must run after the keydev seed is readable under
+/// the current root (i.e. after [`crate::seed::migrate_keydev_boot`]).
+pub fn migrate_rp_seal<S: Storage>(dev: &Device, fs: &mut Fs<S>) {
+    let mut occupied = [false; MAX_RESIDENT_CREDENTIALS as usize];
+    slot_map(fs, EF_RP, &mut occupied);
+    if !occupied.iter().any(|&b| b) {
+        return; // no resident-cred RPs → nothing to seal, don't materialize the seed
+    }
+    let Some(mut seed) = crate::seed::load_keydev(dev, fs) else {
+        return;
+    };
+    let mut buf = [0u8; 256];
+    let mut plain = [0u8; 256];
+    let mut out = [0u8; 256];
+    for i in 0..MAX_RESIDENT_CREDENTIALS {
+        if !occupied[i as usize] {
+            continue;
+        }
+        let fid = EF_RP + i;
+        let Some(n) = fs.read(fid, &mut buf) else {
+            continue;
+        };
+        let n = n.min(buf.len());
+        if n < RP_PREFIX {
+            continue;
+        }
+        let mut rp_id_hash = [0u8; 32];
+        rp_id_hash.copy_from_slice(&buf[1..RP_PREFIX]);
+        let Some((domain, was_boxed)) =
+            unseal_rp_id(&seed, &rp_id_hash, &buf[RP_PREFIX..n], &mut plain)
+        else {
+            continue;
+        };
+        if was_boxed {
+            continue; // already sealed
+        }
+        out[0] = buf[0];
+        out[1..RP_PREFIX].copy_from_slice(&rp_id_hash);
+        if let Ok(blen) = seal_rp_id(&seed, domain, &rp_id_hash, &mut out[RP_PREFIX..]) {
+            let _ = fs.put(fid, &out[..RP_PREFIX + blen]);
+        }
+    }
+    seed.zeroize();
 }
 
 #[cfg(test)]
@@ -715,7 +839,14 @@ mod tests {
         let m = fs.read(EF_RP, &mut rp).unwrap();
         assert_eq!(rp[0], 1);
         assert_eq!(&rp[1..33], &rp_hash[..]);
-        assert_eq!(&rp[33..m], b"example.com");
+        // The rpId domain tail is boxed under the seed: not cleartext on flash,
+        // but it un-boxes back to the original domain.
+        assert_ne!(&rp[RP_PREFIX..m], b"example.com");
+        let mut scratch = [0u8; 256];
+        let (domain, was_boxed) =
+            unseal_rp_id(&SEED, &rp_hash, &rp[RP_PREFIX..m], &mut scratch).unwrap();
+        assert_eq!(domain, "example.com");
+        assert!(was_boxed);
 
         // Re-registering the SAME user reuses the slot (no new RP record / count bump).
         let iv2 = [0x22u8; 12];

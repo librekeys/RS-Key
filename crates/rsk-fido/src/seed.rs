@@ -23,7 +23,7 @@ use zeroize::Zeroize;
 
 use rsk_crypto::chachapoly::{chacha20poly1305_decrypt, chacha20poly1305_encrypt};
 use rsk_crypto::{Device, Mode, PinKdf, aes_decrypt, aes_encrypt};
-use rsk_fs::{Fs, Storage};
+use rsk_fs::{Fs, KeyFid, Sealed, Storage};
 use rsk_sdk::error::{Error, Result};
 
 use crate::Rng;
@@ -49,7 +49,7 @@ pub const LOCK_BLOB_LEN: usize = 12 + 32 + 16;
 
 /// Whether the soft lock is engaged (the wrapped blob is what's on flash).
 pub fn lock_engaged<S: Storage>(fs: &mut Fs<S>) -> bool {
-    fs.has_data(EF_KEY_DEV_ENC)
+    fs.has_key(EF_KEY_DEV_ENC)
 }
 
 /// Wrap the seed value under a host-supplied 32-byte lock key (AUT_ENABLE).
@@ -130,9 +130,9 @@ pub fn store_att_key<S: Storage>(dev: &Device, fs: &mut Fs<S>, key: &[u8; 32]) -
 }
 
 /// Read and decrypt a 32-byte kbase-sealed value (format tags as above).
-fn get_sealed32<S: Storage>(dev: &Device, fs: &mut Fs<S>, fid: u16) -> Option<[u8; 32]> {
+fn get_sealed32<S: Storage>(dev: &Device, fs: &mut Fs<S>, fid: KeyFid) -> Option<[u8; 32]> {
     let mut buf = [0u8; 64];
-    let n = fs.read(fid, &mut buf)?;
+    let n = fs.read_key(fid, &mut buf)?;
     let seal_dev = dev_for_tag(dev, buf[0]);
     if !(matches!(buf[0], FORMAT_F1 | FORMAT_F1_OTP) && n == KEYDEV_F1_LEN) || seal_dev.is_none() {
         buf.zeroize();
@@ -166,7 +166,7 @@ pub fn encrypt_keydev_f1<S: Storage>(dev: &Device, fs: &mut Fs<S>, seed: &[u8; 3
 fn put_sealed32<S: Storage>(
     dev: &Device,
     fs: &mut Fs<S>,
-    fid: u16,
+    fid: KeyFid,
     value: &[u8; 32],
 ) -> Result<()> {
     let mut kdata = [0u8; KEYDEV_F1_LEN];
@@ -181,7 +181,7 @@ fn put_sealed32<S: Storage>(
         kdata.zeroize();
         return Err(Error::ExecError);
     }
-    let r = fs.put(fid, &kdata);
+    let r = fs.put_key(fid, Sealed::wrap(&kdata));
     kdata.zeroize();
     r
 }
@@ -197,7 +197,7 @@ pub fn migrate_keydev_boot<S: Storage>(dev: &Device, fs: &mut Fs<S>) -> Result<(
         return Ok(());
     }
     let mut buf = [0u8; 64];
-    let Some(KEYDEV_F1_LEN) = fs.read(EF_KEY_DEV, &mut buf) else {
+    let Some(KEYDEV_F1_LEN) = fs.read_key(EF_KEY_DEV, &mut buf) else {
         return Ok(());
     };
     if buf[0] != FORMAT_F1 {
@@ -229,7 +229,7 @@ pub fn migrate_keydev_boot<S: Storage>(dev: &Device, fs: &mut Fs<S>) -> Result<(
 /// verified 16-byte PIN hash.
 pub fn migrate_keydev_pin<S: Storage>(dev: &Device, fs: &mut Fs<S>, pin_hash: &[u8]) -> Result<()> {
     let mut buf = [0u8; 64];
-    let Some(KEYDEV_F3_LEN) = fs.read(EF_KEY_DEV, &mut buf) else {
+    let Some(KEYDEV_F3_LEN) = fs.read_key(EF_KEY_DEV, &mut buf) else {
         return Ok(());
     };
     let (seal_dev, plain) = match buf[0] {
@@ -248,7 +248,7 @@ pub fn migrate_keydev_pin<S: Storage>(dev: &Device, fs: &mut Fs<S>, pin_hash: &[
         out.zeroize();
         return Err(Error::ExecError);
     }
-    let r = fs.put(EF_KEY_DEV, &out);
+    let r = fs.put_key(EF_KEY_DEV, Sealed::wrap(&out));
     out.zeroize();
     r?;
     // A pre-OTP blob on an OTP device still needs its inner layer re-sealed.
@@ -265,7 +265,7 @@ pub fn migrate_keydev_pin<S: Storage>(dev: &Device, fs: &mut Fs<S>, pin_hash: &[
 /// the seed is unreadable here anyway).
 pub fn ensure_seed<S: Storage>(dev: &Device, fs: &mut Fs<S>, rng: &mut impl Rng) -> Result<()> {
     let locked = lock_engaged(fs);
-    if !fs.has_data(EF_KEY_DEV) && !locked {
+    if !fs.has_key(EF_KEY_DEV) && !locked {
         let mut seed = [0u8; 32];
         loop {
             rng.fill(&mut seed);
@@ -321,7 +321,7 @@ pub fn bump_sign_counter<S: Storage>(fs: &mut Fs<S>) -> Result<u32> {
 #[cfg(test)]
 pub(crate) fn wrap_keydev_legacy<S: Storage>(dev: &Device, fs: &mut Fs<S>, pin_hash: &[u8]) {
     let mut raw = [0u8; KEYDEV_F1_LEN];
-    assert_eq!(fs.read(EF_KEY_DEV, &mut raw), Some(KEYDEV_F1_LEN));
+    assert_eq!(fs.read(EF_KEY_DEV.get(), &mut raw), Some(KEYDEV_F1_LEN));
     assert_eq!(raw[0], plain_tag(dev));
     let mut out = [0u8; KEYDEV_F3_LEN];
     out[0] = if dev.otp_key.is_some() {
@@ -332,7 +332,7 @@ pub(crate) fn wrap_keydev_legacy<S: Storage>(dev: &Device, fs: &mut Fs<S>, pin_h
     let session = dev.pin_derive_session(pin_hash);
     dev.encrypt_with_aad(&session, &raw[1..], PinKdf::V2, &[0x24; 12], &mut out[1..])
         .unwrap();
-    fs.put(EF_KEY_DEV, &out).unwrap();
+    fs.put(EF_KEY_DEV.get(), &out).unwrap();
 }
 
 #[cfg(test)]
@@ -369,9 +369,9 @@ mod tests {
         let seed = [0x5A; 32];
         encrypt_keydev_f1(&d, &mut fs, &seed).unwrap();
         // Stored as format(1) + 32 encrypted bytes, not the plaintext seed.
-        assert_eq!(fs.size(EF_KEY_DEV), Some(33));
+        assert_eq!(fs.size(EF_KEY_DEV.get()), Some(33));
         let mut raw = [0u8; 33];
-        fs.read(EF_KEY_DEV, &mut raw).unwrap();
+        fs.read(EF_KEY_DEV.get(), &mut raw).unwrap();
         assert_eq!(raw[0], 0x01);
         assert_ne!(&raw[1..], &seed);
         // load_keydev recovers it.
@@ -398,13 +398,13 @@ mod tests {
         let pin_hash = [0x99u8; 16];
         encrypt_keydev_f1(&d, &mut fs, &seed).unwrap();
         wrap_keydev_legacy(&d, &mut fs, &pin_hash);
-        assert_eq!(fs.size(EF_KEY_DEV), Some(61));
+        assert_eq!(fs.size(EF_KEY_DEV.get()), Some(61));
         // The wrapped blob is unreadable (the UP-only failure window)…
         assert_eq!(load_keydev(&d, &mut fs), None);
         // …until a PIN verify unwraps it back to 0x01, permanently.
         migrate_keydev_pin(&d, &mut fs, &pin_hash).unwrap();
         let mut raw = [0u8; 33];
-        assert_eq!(fs.read(EF_KEY_DEV, &mut raw), Some(33));
+        assert_eq!(fs.read(EF_KEY_DEV.get(), &mut raw), Some(33));
         assert_eq!(raw[0], 0x01);
         assert_eq!(load_keydev(&d, &mut fs), Some(seed));
         // Idempotent.
@@ -420,7 +420,7 @@ mod tests {
         wrap_keydev_legacy(&d, &mut fs, &[0x99u8; 16]);
         assert!(migrate_keydev_pin(&d, &mut fs, &[0x11u8; 16]).is_err());
         let mut raw = [0u8; 61];
-        assert_eq!(fs.read(EF_KEY_DEV, &mut raw), Some(61));
+        assert_eq!(fs.read(EF_KEY_DEV.get(), &mut raw), Some(61));
         assert_eq!(raw[0], 0x03);
     }
 
@@ -471,9 +471,9 @@ mod tests {
         let mut fs = fs();
         let mut rng = SeqRng(9);
         let blob = seal_seed_locked(&mut rng, &[0x4D; 32], &[0x5A; 32]);
-        fs.put(EF_KEY_DEV_ENC, &blob).unwrap();
+        fs.put(EF_KEY_DEV_ENC.get(), &blob).unwrap();
         ensure_seed(&d, &mut fs, &mut rng).unwrap();
-        assert!(!fs.has_data(EF_KEY_DEV));
+        assert!(!fs.has_data(EF_KEY_DEV.get()));
         assert!(fs.has_data(EF_COUNTER)); // the rest of the scan still runs
         assert!(!fs.has_data(EF_EE_DEV)); // cert step skipped (seed unreadable)
     }
@@ -495,7 +495,7 @@ mod tests {
 
         migrate_keydev_boot(&otp_dev(), &mut fs).unwrap();
         let mut raw = [0u8; 33];
-        fs.read(EF_KEY_DEV, &mut raw).unwrap();
+        fs.read(EF_KEY_DEV.get(), &mut raw).unwrap();
         assert_eq!(raw[0], 0x11);
         assert_eq!(load_keydev(&otp_dev(), &mut fs), Some(seed));
 
@@ -510,7 +510,7 @@ mod tests {
         encrypt_keydev_f1(&dev(), &mut fs, &[0x5A; 32]).unwrap();
         migrate_keydev_boot(&dev(), &mut fs).unwrap();
         let mut raw = [0u8; 33];
-        fs.read(EF_KEY_DEV, &mut raw).unwrap();
+        fs.read(EF_KEY_DEV.get(), &mut raw).unwrap();
         assert_eq!(raw[0], 0x01);
     }
 
@@ -522,7 +522,7 @@ mod tests {
         let seed = [0x5A; 32];
         encrypt_keydev_f1(&otp_dev(), &mut fs, &seed).unwrap();
         let mut raw = [0u8; 33];
-        fs.read(EF_KEY_DEV, &mut raw).unwrap();
+        fs.read(EF_KEY_DEV.get(), &mut raw).unwrap();
         assert_eq!(raw[0], 0x11);
         assert_eq!(load_keydev(&dev(), &mut fs), None);
     }
@@ -537,18 +537,18 @@ mod tests {
         encrypt_keydev_f1(&dev(), &mut fs, &seed).unwrap();
         wrap_keydev_legacy(&dev(), &mut fs, &pin_hash);
         let mut raw = [0u8; 61];
-        fs.read(EF_KEY_DEV, &mut raw).unwrap();
+        fs.read(EF_KEY_DEV.get(), &mut raw).unwrap();
         assert_eq!(raw[0], 0x03);
 
         // The boot pass cannot touch a PIN-wrapped blob.
         migrate_keydev_boot(&otp_dev(), &mut fs).unwrap();
-        fs.read(EF_KEY_DEV, &mut raw).unwrap();
+        fs.read(EF_KEY_DEV.get(), &mut raw).unwrap();
         assert_eq!(raw[0], 0x03);
 
         // First PIN verify on the OTP build unwraps the outer layer AND re-seals
         // the inner one — straight to a plain 0x11, loadable with no session.
         migrate_keydev_pin(&otp_dev(), &mut fs, &pin_hash).unwrap();
-        assert_eq!(fs.read(EF_KEY_DEV, &mut raw), Some(33));
+        assert_eq!(fs.read(EF_KEY_DEV.get(), &mut raw), Some(33));
         assert_eq!(raw[0], 0x11);
         assert_eq!(load_keydev(&otp_dev(), &mut fs), Some(seed));
 
@@ -567,17 +567,17 @@ mod tests {
         encrypt_keydev_f1(&otp_dev(), &mut fs, &seed).unwrap();
         wrap_keydev_legacy(&otp_dev(), &mut fs, &pin_hash);
         let mut raw = [0u8; 61];
-        fs.read(EF_KEY_DEV, &mut raw).unwrap();
+        fs.read(EF_KEY_DEV.get(), &mut raw).unwrap();
         assert_eq!(raw[0], 0x13);
 
         // Orphan on a no-OTP build: no-op, no error, still closed.
         migrate_keydev_pin(&dev(), &mut fs, &pin_hash).unwrap();
-        fs.read(EF_KEY_DEV, &mut raw).unwrap();
+        fs.read(EF_KEY_DEV.get(), &mut raw).unwrap();
         assert_eq!(raw[0], 0x13);
         assert_eq!(load_keydev(&dev(), &mut fs), None);
 
         migrate_keydev_pin(&otp_dev(), &mut fs, &pin_hash).unwrap();
-        assert_eq!(fs.read(EF_KEY_DEV, &mut raw), Some(33));
+        assert_eq!(fs.read(EF_KEY_DEV.get(), &mut raw), Some(33));
         assert_eq!(raw[0], 0x11);
         assert_eq!(load_keydev(&otp_dev(), &mut fs), Some(seed));
     }

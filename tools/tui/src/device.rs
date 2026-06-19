@@ -970,7 +970,7 @@ pub fn backup_export(pin: Option<&str>) -> Result<String, String> {
     let r = send_cbor(&dev, cid, &payload, 20000);
     match r.first() {
         Some(&0) => {}
-        Some(&0x36) => return Err("device requires a PIN".into()),
+        Some(&0x36) => return Err("device requires a PIN (set one and retry)".into()),
         Some(&0x30) => return Err("export refused — already sealed".into()),
         Some(s) => return Err(format!("export failed: {s:#x}")),
         None => return Err("no response (timeout / no touch)".into()),
@@ -1057,7 +1057,7 @@ pub fn backup_restore(phrase: &str, pin: Option<&str>) -> Result<String, String>
     let (st, _) = vendor(&dev, cid, Value::Map(req), 20000);
     match st {
         0 => Ok("seed restored — FIDO identity matches the backup".into()),
-        0x36 => Err("device requires a PIN".into()),
+        0x36 => Err("device requires a PIN (set one and retry)".into()),
         s => Err(format!("restore failed: {s:#x}")),
     }
 }

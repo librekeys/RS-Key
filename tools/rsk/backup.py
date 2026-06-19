@@ -21,7 +21,7 @@ import os
 import sys
 
 from . import ctaphid
-from .common import connect_fido, die
+from .common import add_pin_arg, connect_fido, device_has_pin, die, resolve_pin
 
 CTAP_VENDOR = 0x41
 VENDOR_MSE, EXPORT, LOAD, FINALIZE, STATE = 1, 2, 3, 4, 5
@@ -39,7 +39,7 @@ def register(sub):
 
     def scheme(sp):
         sp.add_argument("--scheme", choices=["bip39", "slip39"], default="bip39")
-        sp.add_argument("--pin", help="FIDO2 PIN (required if one is set)")
+        add_pin_arg(sp)
 
     e = g.add_parser("export", help="read the seed and print a mnemonic")
     scheme(e)
@@ -108,7 +108,7 @@ def read_seed(dev, cid, pin):
     key, aad = mse_handshake(dev, cid)
     st, m = _vendor(dev, cid, _gated(EXPORT, None, dev, cid, pin))
     if st == 0x36:
-        die("device requires a PIN — pass --pin")
+        die("device requires a PIN — pass --pin or enter it when prompted")
     if st == 0x30:
         die("export refused — already sealed (run after a reset)")
     if st != 0:
@@ -126,7 +126,7 @@ def write_seed(dev, cid, pin, seed):
     blob = nonce + ChaCha20Poly1305(key).encrypt(nonce, seed, aad)
     st, _ = _vendor(dev, cid, _gated(LOAD, {1: blob}, dev, cid, pin))
     if st == 0x36:
-        die("device requires a PIN — pass --pin")
+        die("device requires a PIN — pass --pin or enter it when prompted")
     if st != 0:
         die(f"restore failed: {st:#x}")
 
@@ -166,8 +166,9 @@ def cmd_status(args):
 
 def cmd_export(args):
     dev, cid = connect_fido()
+    pin = resolve_pin(args, has_pin=device_has_pin(dev, cid))
     print("touch the device (BOOTSEL) to authorise the export…", file=sys.stderr)
-    seed = read_seed(dev, cid, args.pin)
+    seed = read_seed(dev, cid, pin)
     mnemonics = to_bip39(seed) if args.scheme == "bip39" else to_slip39(seed, args.threshold, args.shares)
     print("\n=== WRITE THIS DOWN — the only backup of your FIDO seed ===")
     for i, mn in enumerate(mnemonics, 1):
@@ -191,8 +192,9 @@ def cmd_restore(args):
     if len(seed) != 32:
         die(f"reconstructed secret is {len(seed)} bytes, expected 32")
     dev, cid = connect_fido()
+    pin = resolve_pin(args, has_pin=device_has_pin(dev, cid))
     print("touch the device (BOOTSEL) to authorise the restore…", file=sys.stderr)
-    write_seed(dev, cid, args.pin, seed)
+    write_seed(dev, cid, pin, seed)
     print("seed restored ✓ — the FIDO identity now matches the backup")
 
 

@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 RS-Key contributors
+
+# Rekor transparency-log identity monitor — a supply-chain tripwire.
+#
+# Our releases sign keyless inside release-build.yml: cosign over SHA256SUMS
+# plus the SLSA build-provenance attestation, both recorded in the PUBLIC Rekor
+# transparency log (docs/supply-chain.md). That log is tamper-EVIDENT, not
+# tamper-proof — it only helps if someone actually watches it.
+#
+# Every hour this asks sigstore/rekor-monitor "did anything sign as an RS-Key
+# GitHub-Actions identity?" and files a GitHub issue with whatever it finds.
+# Every legitimate release adds entries from release-build.yml, so a couple of
+# EXPECTED issues per release are normal — confirm and close them. The signal
+# that matters is an entry you do NOT recognise: that would mean our signing
+# identity was used by something we did not run (a compromised GitHub-OIDC
+# token, repo, or Actions runner) — the one thing that could forge provenance
+# the SLSA Build L3 attestation otherwise vouches for.
+#
+# We watch the WHOLE …/RS-Key/.github/workflows/ namespace, not just
+# release-build.yml: only release-build.yml ever signs legitimately, so a
+# signature from any other workflow path in this repo is itself the alarm.
+#
+# rekor-monitor ships no tags/releases, so the reusable workflow is pinned to a
+# main commit; Dependabot's weekly github-actions group keeps the pin fresh.
+
+name: rekor-monitor
+
+on:
+  schedule:
+    - cron: "23 * * * *" # hourly at :23 — upstream-recommended cadence (off the top of the hour, which GitHub heavily contends)
+  workflow_dispatch:
+
+# Deny everything at the top; the job below grants exactly what the reusable
+# workflow needs and nothing more.
+permissions: {}
+
+concurrency:
+  group: rekor-monitor
+  cancel-in-progress: false # never abort a run mid-checkpoint
+
+jobs:
+  monitor:
+    permissions:
+      contents: read # checkout the reusable workflow
+      issues: write # file an issue when a watched identity appears
+      id-token: write # detect the running repo/ref for the reusable workflow
+    uses: sigstore/rekor-monitor/.github/workflows/reusable_monitoring.yml@50847dce81efa8d76093c64e08ba48d2c21399c3 # main @ 2026-06-18
+    with:
+      file_issue: true
+      once: true
+      config: |
+        monitoredValues:
+          certIdentities:
+            - certSubject: '^https://github\.com/TheMaxMur/RS-Key/\.github/workflows/.*$'
+              issuers:
+                - '^https://token\.actions\.githubusercontent\.com$'

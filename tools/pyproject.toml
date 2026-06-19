@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 RS-Key contributors
+#
+# Packaging for the `rsk` device CLI so it runs WITHOUT Nix on any host with a
+# Python toolchain — `uvx --from ./tools rsk …`, `uv run`, `pipx install`, or a
+# plain `pip install`. The Nix dev shell (nix/host-tools.nix) stays the primary
+# path; this mirrors its runtime deps for everyone else. The package lives in
+# tools/rsk, so this file sits in tools/ and the import name stays `rsk`.
+
+[project]
+name = "rsk"
+description = "RS-Key device CLI — status, seed backup, secure boot, OTP, FIDO, OpenPGP, audit."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "AGPL-3.0-only"
+authors = [{ name = "RS-Key contributors" }]
+keywords = ["fido2", "webauthn", "rp2350", "security-key", "openpgp", "piv"]
+dynamic = ["version"]
+
+# Mirrors the `rskPython` runtime set in nix/host-tools.nix (the CLI half — the
+# test-only extras like pytest/dilithium live under [optional-dependencies]).
+dependencies = [
+  "hidapi>=0.14",         # CTAPHID transport (`import hid`)
+  "cryptography>=42",     # P-256 ECDH / AES / HMAC — clientPIN + MSE seed backup
+  "pyscard>=2.0",         # PC/SC for the CCID applets (PIV / OATH / rescue)
+  "fido2>=1.1",           # `rsk fido` set-pin / list-passkeys
+  "mnemonic>=0.21",       # BIP-39 seed rendering
+  "shamir-mnemonic>=0.3", # SLIP-39 Shamir shares
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+rsk = "rsk.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/TheMaxMur/RS-Key"
+Documentation = "https://github.com/TheMaxMur/RS-Key/tree/main/docs"
+Source = "https://github.com/TheMaxMur/RS-Key"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# Single source of truth for the version: rsk/__init__.py's __version__.
+[tool.hatch.version]
+path = "rsk/__init__.py"
+
+# tools/ also holds the Rust `tui/` workspace — package only the `rsk` Python
+# module, nothing else under tools/.
+[tool.hatch.build.targets.wheel]
+packages = ["rsk"]
+
+[tool.hatch.build.targets.sdist]
+include = ["rsk", "README.md"]

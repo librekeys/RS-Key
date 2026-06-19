@@ -263,7 +263,7 @@ impl<'a, S: Storage> DoWriter<'a, S> {
         }
         for (slot, fid) in [(0u8, EF_PK_SIG), (1, EF_PK_DEC), (2, EF_PK_AUT)] {
             self.push(slot);
-            let present = self.fs.has_data(fid);
+            let present = self.fs.has_key(fid);
             self.push(if present { 0x01 } else { 0x00 });
         }
         self.pos - init

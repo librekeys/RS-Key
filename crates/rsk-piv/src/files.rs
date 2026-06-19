@@ -7,7 +7,7 @@
 //! byte of the `5FC1xx` object id) — the wire slot is the fid low byte everywhere.
 
 use rsk_crypto::Device;
-use rsk_fs::{Fs, Storage};
+use rsk_fs::{Fs, KeyFid, Storage};
 use rsk_openpgp::Rng;
 use rsk_openpgp::keys::{Curve, PrivKey};
 use rsk_sdk::Sw;
@@ -67,9 +67,11 @@ pub fn is_key(slot: u8) -> bool {
     is_active(slot) || is_retired(slot)
 }
 
-/// Private-key file for a wire slot (also 9B and F9).
-pub fn key_fid(slot: u8) -> u16 {
-    0xD100 | slot as u16
+/// Private-key file for a wire slot (also 9B and F9). A [`KeyFid`]: its contents
+/// are AES-256-GCM-sealed ([`seal`]), so the slot can only be reached through the
+/// typed key API, never the plaintext `Fs::put`/`read`.
+pub fn key_fid(slot: u8) -> KeyFid {
+    KeyFid::new(0xD100 | slot as u16)
 }
 
 /// PIN / PUK verifier files: `[len, format=0x01, verifier(32)]`.
@@ -163,7 +165,7 @@ pub fn scan_files<S: Storage>(dev: &Device, fs: &mut Fs<S>, rng: &mut dyn Rng) -
         fs.put(EF_RETRIES, &[d, d, d, d])
             .map_err(|_| Sw::MEMORY_FAILURE)?;
     }
-    if !fs.has_data(key_fid(SLOT_CARDMGM)) {
+    if !fs.has_key(key_fid(SLOT_CARDMGM)) {
         let mut key = DEFAULT_MGM;
         let r = seal::seal_put(dev, fs, rng, key_fid(SLOT_CARDMGM), &key);
         key.zeroize();
@@ -172,12 +174,12 @@ pub fn scan_files<S: Storage>(dev: &Device, fs: &mut Fs<S>, rng: &mut dyn Rng) -
         // (admin provisioning isn't touch-gated) while still enforcing it if a
         // host raises it via SET MGM KEY. Slot keys keep their ALWAYS default.
         fs.meta_add(
-            key_fid(SLOT_CARDMGM),
+            key_fid(SLOT_CARDMGM).get(),
             &[ALGO_AES192, PINPOLICY_ALWAYS, TOUCHPOLICY_NEVER],
         )
         .map_err(|_| Sw::MEMORY_FAILURE)?;
     }
-    if !fs.has_data(key_fid(SLOT_ATTESTATION)) {
+    if !fs.has_key(key_fid(SLOT_ATTESTATION)) {
         let key = PrivKey::generate(Curve::P384, rng).ok_or(Sw::EXEC_ERROR)?;
         seal::store_ec_key(dev, fs, rng, key_fid(SLOT_ATTESTATION), &key)?;
         let mut point = [0u8; 97];

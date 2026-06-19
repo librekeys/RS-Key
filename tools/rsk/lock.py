@@ -21,7 +21,7 @@ import sys
 from . import ctaphid
 from .backup import (from_bip39, from_slip39, mse_handshake, to_bip39,
                      to_slip39, _acfg_token, _vendor)
-from .common import connect_fido, die
+from .common import add_pin_arg, connect_fido, device_has_pin, die, resolve_pin
 
 CTAP_CONFIG = 0x0D
 CONFIG_VENDOR = 0xFF
@@ -41,7 +41,7 @@ def register(sub):
 
     def key_args(sp):
         sp.add_argument("--scheme", choices=["bip39", "slip39", "hex"], default="bip39")
-        sp.add_argument("--pin", help="FIDO2 PIN (authenticatorConfig requires one)")
+        add_pin_arg(sp, help="FIDO2 PIN (authenticatorConfig requires one; prompted if omitted)")
 
     e = g.add_parser("enable", help="engage the lock (shows the lock key ONCE)")
     key_args(e)
@@ -81,10 +81,8 @@ def _wrap_for_channel(key, aad, secret):
 
 
 def _config_vendor(dev, cid, pin, vendor_id, param=None):
-    """authenticatorConfig {1: 0xFF, 2: {1: id, 2: param?}, 3, 4} with the acfg MAC."""
-    if pin is None:
-        die("authenticatorConfig needs the acfg pinUvAuthToken — pass --pin "
-            "(no FIDO2 PIN set? set one first: rsk fido set-pin)")
+    """authenticatorConfig {1: 0xFF, 2: {1: id, 2: param?}, 3, 4} with the acfg MAC.
+    `pin` is resolved by the caller (resolve_pin, required=True), so it is set."""
     subpara = {1: vendor_id}
     if param is not None:
         subpara[2] = param
@@ -138,6 +136,7 @@ def cmd_enable(args):
         die("already locked")
     if not s["has_seed"]:
         die("no seed on the device")
+    pin = resolve_pin(args, has_pin=device_has_pin(dev, cid), required=True)
 
     key = os.urandom(32)
     if args.scheme == "bip39":
@@ -171,7 +170,7 @@ After enabling:
     chan_key, aad = mse_handshake(dev, cid)
     blob = _wrap_for_channel(chan_key, aad, key)
     print(AUT_TOUCH_HINT, file=sys.stderr)
-    st = _config_vendor(dev, cid, args.pin, AUT_ENABLE, blob)
+    st = _config_vendor(dev, cid, pin, AUT_ENABLE, blob)
     if st != 0:
         die(f"AUT_ENABLE failed: {st:#x}")
     s = _state(dev, cid)
@@ -192,10 +191,11 @@ def cmd_disable(args):
     s = _state(dev, cid)
     if not s["locked"]:
         die("not locked")
+    pin = resolve_pin(args, has_pin=device_has_pin(dev, cid), required=True)
     if not s["unlocked"]:
         _unlock(dev, cid, _read_lock_key(args))
     print(AUT_TOUCH_HINT, file=sys.stderr)
-    st = _config_vendor(dev, cid, args.pin, AUT_DISABLE)
+    st = _config_vendor(dev, cid, pin, AUT_DISABLE)
     if st != 0:
         die(f"AUT_DISABLE failed: {st:#x}")
     s = _state(dev, cid)

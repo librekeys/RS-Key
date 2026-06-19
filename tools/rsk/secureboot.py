@@ -139,8 +139,12 @@ def _revoke_leaves_valid(key_valid, key_invalid, slot):
 
 
 def pages_locked(s):
-    """Key/flag pages bootloader-read-only (after `lock`) ⇒ BOOTSEL can't write keys."""
-    return bool(s["page1_lock"]) or bool(s["page2_lock"])
+    """Key/flag pages bootloader-read-only (after `lock`) ⇒ BOOTSEL can't write keys.
+    Only LOCK_BL (bits 4-5 of each RBIT-3 byte, mask 0x303030) blocks bootloader
+    writes; a pre-existing LOCK_NS/LOCK_S in the row does not, so mask to LOCK_BL
+    rather than testing the whole row (else a chip with LOCK_NS set false-positives)."""
+    bl = 0x303030
+    return bool((s["page1_lock"] or 0) & bl) or bool((s["page2_lock"] or 0) & bl)
 
 
 # --- device state -------------------------------------------------------------

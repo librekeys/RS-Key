@@ -9,13 +9,13 @@
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
 use rsk_crypto::{Device, Mode, aes_decrypt, aes_encrypt};
-use rsk_fs::{Fs, Storage};
+use rsk_fs::{Fs, KeyFid, Sealed, Storage};
 use zeroize::Zeroize;
 
 use crate::Rng;
 
 /// The sealed device key. Outside every applet reset scope, like `EF_PHY`.
-pub const EF_DEVCERT_KEY: u16 = 0xE0C1;
+pub const EF_DEVCERT_KEY: KeyFid = KeyFid::new(0xE0C1);
 /// The uploaded device attestation certificate.
 pub const EF_DEVCERT: u16 = 0x2F02;
 
@@ -41,7 +41,7 @@ pub fn load_or_generate<S: Storage>(
 
     let mut buf = [0u8; 33];
     let mut scalar = [0u8; 32];
-    let key = match fs.read(EF_DEVCERT_KEY, &mut buf) {
+    let key = match fs.read_key(EF_DEVCERT_KEY, &mut buf) {
         // Bare 32 bytes: sealed under the pre-OTP kbase arm.
         Some(32) => {
             scalar.copy_from_slice(&buf[..32]);
@@ -100,11 +100,16 @@ fn put_sealed<S: Storage>(dev: &Device, fs: &mut Fs<S>, sealed: &[u8; 32]) -> Re
         let mut rec = [0u8; 33];
         rec[0] = TAG_OTP;
         rec[1..].copy_from_slice(sealed);
-        let r = fs.put(EF_DEVCERT_KEY, &rec).map(|_| ()).map_err(|_| ());
+        let r = fs
+            .put_key(EF_DEVCERT_KEY, Sealed::wrap(&rec))
+            .map(|_| ())
+            .map_err(|_| ());
         rec.zeroize();
         r
     } else {
-        fs.put(EF_DEVCERT_KEY, sealed).map(|_| ()).map_err(|_| ())
+        fs.put_key(EF_DEVCERT_KEY, Sealed::wrap(sealed))
+            .map(|_| ())
+            .map_err(|_| ())
     }
 }
 
@@ -116,7 +121,7 @@ pub fn migrate_kbase<S: Storage>(dev: &Device, fs: &mut Fs<S>) {
         return;
     }
     let mut buf = [0u8; 33];
-    if fs.read(EF_DEVCERT_KEY, &mut buf) != Some(32) {
+    if fs.read_key(EF_DEVCERT_KEY, &mut buf) != Some(32) {
         return;
     }
     let mut iv = [0u8; 16];
@@ -214,13 +219,13 @@ mod tests {
         let mut fs = fs();
         let mut rng = LcgRng(5);
         let key = load_or_generate(&dev(), None, &mut fs, &mut rng).unwrap();
-        assert_eq!(fs.size(EF_DEVCERT_KEY), Some(32));
+        assert_eq!(fs.size(EF_DEVCERT_KEY.get()), Some(32));
 
         // Boot pass re-seals as the tagged 33-byte form; idempotent.
         migrate_kbase(&otp_dev(), &mut fs);
-        assert_eq!(fs.size(EF_DEVCERT_KEY), Some(33));
+        assert_eq!(fs.size(EF_DEVCERT_KEY.get()), Some(33));
         migrate_kbase(&otp_dev(), &mut fs);
-        assert_eq!(fs.size(EF_DEVCERT_KEY), Some(33));
+        assert_eq!(fs.size(EF_DEVCERT_KEY.get()), Some(33));
 
         // The OTP device loads the SAME key; a pre-OTP device fails cleanly.
         let migrated = load_or_generate(&otp_dev(), None, &mut fs, &mut rng).unwrap();
@@ -233,7 +238,7 @@ mod tests {
         let mut fs = fs();
         let mut rng = LcgRng(7);
         let key = load_or_generate(&otp_dev(), None, &mut fs, &mut rng).unwrap();
-        assert_eq!(fs.size(EF_DEVCERT_KEY), Some(33));
+        assert_eq!(fs.size(EF_DEVCERT_KEY.get()), Some(33));
         let again = load_or_generate(&otp_dev(), None, &mut fs, &mut rng).unwrap();
         assert_eq!(key.to_bytes(), again.to_bytes());
     }

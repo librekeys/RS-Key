@@ -188,7 +188,7 @@ fn att_import<S: Storage, R: Rng>(ctx: &mut Ctx<S, R>, req: &Req) -> CtapResult 
 /// `ATT_CLEAR`: drop the org attestation (same gate as the import).
 fn att_clear<S: Storage, R: Rng>(ctx: &mut Ctx<S, R>, req: &Req) -> CtapResult {
     gate(ctx, req)?;
-    let _ = ctx.fs.delete(EF_ATT_KEY);
+    let _ = ctx.fs.delete_key(EF_ATT_KEY);
     let _ = ctx.fs.delete(EF_ATT_CHAIN);
     journal::append(ctx, journal::EV_ATT_CLEAR, 0, &[]);
     Ok(0)
@@ -198,7 +198,7 @@ fn att_clear<S: Storage, R: Rng>(ctx: &mut Ctx<S, R>, req: &Req) -> CtapResult {
 /// BACKUP_STATE; the chain itself is public.
 fn att_state<S: Storage, R: Rng>(ctx: &mut Ctx<S, R>, out: &mut [u8]) -> CtapResult {
     let mut chain = [0u8; cert::ATT_CHAIN_MAX + 1 + 2 * cert::ATT_CHAIN_MAX_CERTS];
-    let present = ctx.fs.has_data(EF_ATT_KEY);
+    let present = ctx.fs.has_key(EF_ATT_KEY);
     let n = ctx.fs.read(EF_ATT_CHAIN, &mut chain).unwrap_or(0);
     encode(out, |e| {
         e.map(if present && n > 0 { 2 } else { 1 })?
@@ -280,7 +280,7 @@ fn unlock<S: Storage, R: Rng>(ctx: &mut Ctx<S, R>, req: &Req) -> CtapResult {
         return Err(CtapError::IntegrityFailure);
     }
     let mut blob = [0u8; LOCK_BLOB_LEN];
-    let n = ctx.fs.read(EF_KEY_DEV_ENC, &mut blob);
+    let n = ctx.fs.read_key(EF_KEY_DEV_ENC, &mut blob);
     let seed = n.and_then(|n| open_seed_locked(&lock_key, &blob[..n]));
     lock_key.zeroize();
     match seed {
@@ -478,7 +478,7 @@ fn backup_finalize<S: Storage, R: Rng>(ctx: &mut Ctx<S, R>) -> CtapResult {
 /// cycle.
 fn backup_state<S: Storage, R: Rng>(ctx: &mut Ctx<S, R>, out: &mut [u8]) -> CtapResult {
     let sealed = ctx.fs.has_data(EF_BACKUP_SEALED);
-    let has_seed = ctx.fs.has_data(EF_KEY_DEV);
+    let has_seed = ctx.fs.has_key(EF_KEY_DEV);
     let locked = lock_engaged(ctx.fs);
     let unlocked = ctx.state.keydev_dec.is_some();
     encode(out, |e| {
@@ -1134,8 +1134,8 @@ mod tests {
     #[test]
     fn lock_enable_wraps_seed_and_drops_plain() {
         let (mut fs, mut rng, mut st, _host, _seed) = locked_setup();
-        assert!(!fs.has_data(EF_KEY_DEV));
-        assert_eq!(fs.size(EF_KEY_DEV_ENC), Some(LOCK_BLOB_LEN));
+        assert!(!fs.has_data(EF_KEY_DEV.get()));
+        assert_eq!(fs.size(EF_KEY_DEV_ENC.get()), Some(LOCK_BLOB_LEN));
         // No RAM copy after enable — operations are locked out immediately.
         assert!(st.keydev_dec.is_none());
         assert_eq!(load_keydev(&dev(), &mut fs), None);
@@ -1161,7 +1161,7 @@ mod tests {
             presence: &mut presence,
         };
         assert_eq!(ctx.load_keydev(), Some(seed));
-        assert!(!fs.has_data(EF_KEY_DEV));
+        assert!(!fs.has_data(EF_KEY_DEV.get()));
         assert_eq!(
             state_flags(&mut fs, &mut rng, &mut st),
             (false, false, true, true)
@@ -1191,7 +1191,7 @@ mod tests {
         let mut req = [0u8; 192];
         let n = config_vendor_req(crate::consts::CONFIG_AUT_DISABLE, None, &mut req);
         run_config(&mut fs, &mut rng, &mut st, &mut AlwaysConfirm, &req[..n]).unwrap();
-        assert!(!fs.has_data(EF_KEY_DEV_ENC));
+        assert!(!fs.has_data(EF_KEY_DEV_ENC.get()));
         assert!(st.keydev_dec.is_none()); // no stale RAM copy
         assert_eq!(load_keydev(&dev(), &mut fs), Some(seed));
         assert_eq!(
@@ -1207,7 +1207,7 @@ mod tests {
         let n = config_vendor_req(crate::consts::CONFIG_AUT_DISABLE, None, &mut req);
         let e = run_config(&mut fs, &mut rng, &mut st, &mut AlwaysConfirm, &req[..n]);
         assert_eq!(e, Err(CtapError::PinAuthInvalid));
-        assert!(fs.has_data(EF_KEY_DEV_ENC));
+        assert!(fs.has_data(EF_KEY_DEV_ENC.get()));
     }
 
     #[test]
@@ -1229,7 +1229,7 @@ mod tests {
         let n = config_vendor_req(crate::consts::CONFIG_AUT_ENABLE, Some(&blob), &mut req);
         let e = run_config(&mut fs, &mut rng, &mut st, &mut AlwaysConfirm, &req[..n]);
         assert_eq!(e, Err(CtapError::NotAllowed));
-        assert!(fs.has_data(EF_KEY_DEV));
+        assert!(fs.has_data(EF_KEY_DEV.get()));
     }
 
     #[test]
@@ -1242,8 +1242,8 @@ mod tests {
         let n = config_vendor_req(crate::consts::CONFIG_AUT_ENABLE, Some(&blob), &mut req);
         let e = run_config(&mut fs, &mut rng, &mut st, &mut Decline, &req[..n]);
         assert_eq!(e, Err(CtapError::OperationDenied));
-        assert!(fs.has_data(EF_KEY_DEV));
-        assert!(!fs.has_data(EF_KEY_DEV_ENC));
+        assert!(fs.has_data(EF_KEY_DEV.get()));
+        assert!(!fs.has_data(EF_KEY_DEV_ENC.get()));
     }
 
     #[test]
@@ -1317,7 +1317,7 @@ mod tests {
             presence: &mut presence,
         };
         crate::reset::reset(&mut ctx).unwrap();
-        assert!(!fs.has_data(EF_KEY_DEV_ENC));
+        assert!(!fs.has_data(EF_KEY_DEV_ENC.get()));
         let new_seed = load_keydev(&dev(), &mut fs).unwrap();
         assert_ne!(new_seed, old_seed); // fresh identity — the recovery path
     }
@@ -1326,7 +1326,7 @@ mod tests {
     fn ensure_seed_does_not_regenerate_under_lock() {
         let (mut fs, mut rng, mut st, host, seed) = locked_setup();
         ensure_seed(&dev(), &mut fs, &mut rng).unwrap();
-        assert!(!fs.has_data(EF_KEY_DEV)); // boot on a locked device: no regen
+        assert!(!fs.has_data(EF_KEY_DEV.get())); // boot on a locked device: no regen
         run_unlock(&mut fs, &mut rng, &mut st, &LOCK_KEY, &host, 0x27).unwrap();
         assert_eq!(st.keydev_dec, Some(seed)); // blob untouched, same seed
     }

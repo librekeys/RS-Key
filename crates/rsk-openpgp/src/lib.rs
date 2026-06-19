@@ -30,7 +30,7 @@ pub mod terminate;
 use core::cell::RefCell;
 
 use rsk_crypto::Device;
-use rsk_fs::{Fs, Storage};
+use rsk_fs::{Fs, KeyFid, Storage};
 use rsk_sdk::{Apdu, Applet, ResBuf, Sw};
 
 pub use init::{Error, scan_files};
@@ -149,7 +149,7 @@ impl<'a> OpenpgpApplet<'a> {
         p1: u8,
         p2: u8,
         data: &[u8],
-    ) -> Result<Option<(u16, usize)>, Sw> {
+    ) -> Result<Option<(KeyFid, usize)>, Sw> {
         keypairgen::rsa_generate_params(fs, &self.sess, p1, p2, data)
     }
 
@@ -159,7 +159,7 @@ impl<'a> OpenpgpApplet<'a> {
         &self,
         fs: &mut Fs<S>,
         rng: &mut dyn Rng,
-        fid: u16,
+        fid: KeyFid,
         key: &rsa::RsaPrivateKey,
         out: &mut [u8],
     ) -> (usize, Sw) {
@@ -554,7 +554,7 @@ mod tests {
         let mut fs = make_fs();
         let presence = RefCell::new(crate::AlwaysConfirm);
         let mut app = OpenpgpApplet::new(SERIAL_ID, SERIAL_HASH, None, &rng, &presence);
-        fs.put(consts::EF_PK_SIG, &[0xAB; 40]).unwrap();
+        fs.put(consts::EF_PK_SIG.get(), &[0xAB; 40]).unwrap();
         // Without PW3 (and PW3 unblocked) the terminate is refused — nothing wiped.
         let (_b, sw) = run(
             &mut app,
@@ -562,7 +562,7 @@ mod tests {
             &[0x00, consts::INS_TERMINATE_DF, 0x00, 0x00],
         );
         assert_eq!(sw, Sw::SECURITY_STATUS_NOT_SATISFIED);
-        assert!(fs.has_data(consts::EF_PK_SIG));
+        assert!(fs.has_data(consts::EF_PK_SIG.get()));
         // VERIFY PW3, then terminate wipes the imported key and re-seeds defaults.
         let mut v = vec![0x00, consts::INS_VERIFY, 0x00, consts::PW3_MODE83];
         v.push(consts::PW3_DEFAULT.len() as u8);
@@ -574,8 +574,8 @@ mod tests {
             &[0x00, consts::INS_TERMINATE_DF, 0x00, 0x00],
         );
         assert_eq!(sw, Sw::OK);
-        assert!(!fs.has_data(consts::EF_PK_SIG));
-        assert!(fs.has_data(consts::EF_DEK_PW1));
+        assert!(!fs.has_data(consts::EF_PK_SIG.get()));
+        assert!(fs.has_data(consts::EF_DEK_PW1.get()));
     }
 
     #[test]
@@ -1226,13 +1226,13 @@ mod tests {
         let mut app = OpenpgpApplet::new(SERIAL_ID, SERIAL_HASH, None, &rng, &presence);
         verify_pin(&mut app, &mut fs, consts::PW3_MODE83, consts::PW3_DEFAULT);
         assert_eq!(put(&mut app, &mut fs, 0x00, 0xC2, ATTR_P256_ECDH), Sw::OK);
-        assert!(!fs.has_data(consts::EF_AES_KEY));
+        assert!(!fs.has_data(consts::EF_AES_KEY.get()));
 
         let (do_, sw) = keygen(&mut app, &mut fs, 0x80, 0xB8);
         assert_eq!(sw, Sw::OK);
         let point = ec_point(&do_).to_vec();
         // Generating the DEC key also mints a fresh AES key.
-        assert!(fs.has_data(consts::EF_AES_KEY));
+        assert!(fs.has_data(consts::EF_AES_KEY.get()));
 
         // The card computes ECDH with the generated key; ECDH is symmetric, so
         // ECDH(dec_priv, eph_pub).x == ECDH(eph_priv, dec_pub).x.
@@ -1266,7 +1266,7 @@ mod tests {
         assert_eq!(put(&mut app, &mut fs, 0x00, 0xC2, ATTR_P256_ECDH), Sw::OK);
         let (_do, sw) = keygen(&mut app, &mut fs, 0x80, 0xB8); // mints EF_AES_KEY
         assert_eq!(sw, Sw::OK);
-        assert!(fs.has_data(consts::EF_AES_KEY));
+        assert!(fs.has_data(consts::EF_AES_KEY.get()));
 
         verify_pin(&mut app, &mut fs, consts::PW1_MODE82, consts::PW1_DEFAULT); // PW2
         let pt = [0xABu8; 32]; // two AES blocks

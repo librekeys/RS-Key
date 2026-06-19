@@ -24,8 +24,8 @@ use crate::consts::{
     EF_CRED, EF_RP, MAX_RESIDENT_CREDENTIALS,
 };
 use crate::credential::{
-    CRED_RESIDENT_LEN, CredInput, RECORD_PREFIX, credential_create, credential_load,
-    credential_store, derive_large_blob_key, slot_map,
+    CRED_RESIDENT_LEN, CredInput, RECORD_PREFIX, RP_PREFIX, credential_create, credential_load,
+    credential_store, derive_large_blob_key, slot_map, unseal_rp_id,
 };
 use crate::ec::CredKey;
 use crate::error::{CtapError, CtapResult};
@@ -34,8 +34,9 @@ use crate::state::{FidoState, PERM_CM};
 use crate::{Ctx, Rng};
 
 const MAX_RAW_SUBPARA: usize = 256;
-/// EF_RP record: `count(1) ‖ rpIdHash(32) ‖ rpId_text`.
-const RP_PREFIX: usize = 33;
+// EF_RP record: `count(1) ‖ rpIdHash(32) ‖ box(rpId_text)` — the rpId domain is
+// boxed under the device seed (see `credential::seal_rp_id`); `RP_PREFIX` spans
+// the cleartext `count ‖ rpIdHash` head.
 
 struct Req<'a> {
     subcommand: u64,
@@ -314,12 +315,20 @@ fn enumerate_rps<S: Storage, R: Rng>(
     }
     ctx.state.cm.rp_counter = target.saturating_add(1);
 
-    let rp_id = core::str::from_utf8(&rp[RP_PREFIX..rp_len]).map_err(|_| CtapError::Other)?;
+    // The EF_RP tail is boxed under the device seed — recover the rpId domain.
+    let mut rp_id_hash = [0u8; 32];
+    rp_id_hash.copy_from_slice(&rp[1..RP_PREFIX]);
+    let mut seed = ctx.load_keydev().ok_or(CtapError::NotAllowed)?;
+    let mut scratch = [0u8; 256];
+    let unsealed = unseal_rp_id(&seed, &rp_id_hash, &rp[RP_PREFIX..rp_len], &mut scratch);
+    seed.zeroize();
+    let (rp_id, _) = unsealed.ok_or(CtapError::Other)?;
+
     let mut enc = Encoder::new(Cursor::new(out));
     enc.map(if begin { 3 } else { 2 })
         .and_then(|e| e.u8(3)?.map(1))
         .and_then(|e| e.str("id")?.str(rp_id))
-        .and_then(|e| e.u8(4)?.bytes(&rp[1..RP_PREFIX]))
+        .and_then(|e| e.u8(4)?.bytes(&rp_id_hash))
         .map_err(|_| CtapError::Other)?;
     if begin {
         enc.u8(5)
@@ -1369,6 +1378,98 @@ mod tests {
         assert_eq!(
             run(&mut fs, &mut state, &cm_next(0x05), &mut out),
             Err(CtapError::NotAllowed)
+        );
+    }
+
+    // Does any live EF_RP record contain `needle` in its raw at-rest bytes?
+    fn rp_flash_has(fs: &mut Fs<RamStorage>, needle: &[u8]) -> bool {
+        let mut occupied = [false; MAX_RESIDENT_CREDENTIALS as usize];
+        slot_map(fs, EF_RP, &mut occupied);
+        let mut buf = [0u8; 256];
+        for i in 0..MAX_RESIDENT_CREDENTIALS {
+            if !occupied[i as usize] {
+                continue;
+            }
+            if let Some(n) = fs.read(EF_RP + i, &mut buf) {
+                let n = n.min(buf.len());
+                if buf[..n].windows(needle.len()).any(|w| w == needle) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn rp_domain_sealed_on_flash() {
+        let (mut fs, mut rng) = setup();
+        register(&mut fs, &mut rng, "example.com", &[1, 1], "alice");
+        // The rpId domain must not survive in cleartext in the EF_RP record...
+        assert!(
+            !rp_flash_has(&mut fs, b"example.com"),
+            "rpId domain leaked in cleartext on flash"
+        );
+        // ...but enumerateRPs still round-trips it to the host.
+        let mut state = armed(PERM_CM);
+        let mut out = [0u8; 256];
+        let n = run(
+            &mut fs,
+            &mut state,
+            &cm_request(0x02, None, &TOKEN),
+            &mut out,
+        )
+        .unwrap();
+        let (id, hash, _) = parse_rp(&out[..n], true);
+        assert_eq!(id, "example.com");
+        assert_eq!(hash, sha256(b"example.com"));
+    }
+
+    #[test]
+    fn legacy_plaintext_rp_migrates_and_stays_usable() {
+        let (mut fs, _rng) = setup();
+        // A pre-migration EF_RP record: count(1) ‖ rpIdHash(32) ‖ cleartext domain.
+        let hash = sha256(b"example.com");
+        let mut rec = std::vec::Vec::new();
+        rec.push(1u8);
+        rec.extend_from_slice(&hash);
+        rec.extend_from_slice(b"example.com");
+        fs.put(EF_RP, &rec).unwrap();
+        assert!(rp_flash_has(&mut fs, b"example.com"));
+
+        // Boot migration boxes the cleartext domain in place.
+        crate::credential::migrate_rp_seal(&dev(), &mut fs);
+        assert!(
+            !rp_flash_has(&mut fs, b"example.com"),
+            "migration left the rpId domain in cleartext"
+        );
+        // The count byte survives the re-box.
+        let mut buf = [0u8; 256];
+        let n = fs.read(EF_RP, &mut buf).unwrap();
+        assert_eq!(buf[0], 1);
+        assert_eq!(buf[1..RP_PREFIX], hash[..]);
+
+        // enumerateRPs still recovers the original domain.
+        let mut state = armed(PERM_CM);
+        let mut out = [0u8; 256];
+        let n2 = run(
+            &mut fs,
+            &mut state,
+            &cm_request(0x02, None, &TOKEN),
+            &mut out,
+        )
+        .unwrap();
+        let (id, h, _) = parse_rp(&out[..n2], true);
+        assert_eq!(id, "example.com");
+        assert_eq!(h, hash);
+
+        // Idempotent: a second pass is a no-op and the record stays usable.
+        let before = buf[..n.min(buf.len())].to_vec();
+        crate::credential::migrate_rp_seal(&dev(), &mut fs);
+        let m = fs.read(EF_RP, &mut buf).unwrap();
+        assert_eq!(
+            &buf[..m.min(buf.len())],
+            &before[..],
+            "migration not idempotent"
         );
     }
 }

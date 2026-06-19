@@ -16,6 +16,7 @@
 
 # Using the device
 
+- [The `rsk` CLI](guides/cli.md)
 - [FIDO2 / WebAuthn / U2F](guides/fido2.md)
 - [SSH keys (`-sk`)](guides/ssh.md)
 - [Git: signing + auth](guides/git.md)

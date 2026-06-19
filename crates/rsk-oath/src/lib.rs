@@ -7,12 +7,15 @@
 
 #![cfg_attr(not(test), no_std)]
 
+mod seal;
+
 use core::cell::RefCell;
 
 use rsk_crypto::{Device, hmac_sha1, hmac_sha256, hmac_sha512};
-use rsk_fs::{Fs, Storage};
+use rsk_fs::{Fs, KeyFid, Storage};
 use rsk_sdk::tlv::{find_tag, format_len};
 use rsk_sdk::{Apdu, Applet, ResBuf, Sw};
+use zeroize::Zeroize;
 
 /// YKOATH applet AID.
 pub const OATH_AID: &[u8] = &[0xA0, 0x00, 0x00, 0x05, 0x27, 0x21, 0x01];
@@ -52,8 +55,8 @@ impl UserPresence for AlwaysConfirm {
 }
 
 // FIDs.
-const EF_OATH_CRED: u16 = 0xBA00; // 255 slots, 0xBA00..=0xBAFE
-const EF_OATH_CODE: u16 = 0xBAFF;
+const EF_OATH_CRED: u16 = 0xBA00; // 255 cred slots, 0xBA00..=0xBAFE (each a sealed KeyFid)
+const EF_OATH_CODE: KeyFid = KeyFid::new(0xBAFF); // SET CODE validation key, sealed
 const EF_OTP_PIN: u16 = 0x10A0;
 
 const MAX_OATH_CRED: u16 = 255;
@@ -229,16 +232,24 @@ impl<'a> OathApplet<'a> {
         }
 
         let mut scratch = [0u8; CRED_MAX];
-        let fid = match find_cred(fs, name, &mut scratch) {
+        let dev = self.device();
+        let fid = match find_cred(&dev, fs, name, &mut scratch) {
             Some((fid, _)) => fid,
             None => match free_slot(fs) {
                 Some(fid) => fid,
                 None => return Sw::FILE_FULL,
             },
         };
-        match fs.put(fid, &blob[..n]) {
-            Ok(()) => Sw::OK,
-            Err(_) => Sw::MEMORY_FAILURE,
+        if seal::seal_put(
+            &dev,
+            fs,
+            &mut *self.rng.borrow_mut(),
+            KeyFid::new(fid),
+            &blob[..n],
+        ) {
+            Sw::OK
+        } else {
+            Sw::MEMORY_FAILURE
         }
     }
 
@@ -250,7 +261,8 @@ impl<'a> OathApplet<'a> {
             return Sw::INCORRECT_PARAMS;
         };
         let mut scratch = [0u8; CRED_MAX];
-        match find_cred(fs, name, &mut scratch) {
+        let dev = self.device();
+        match find_cred(&dev, fs, name, &mut scratch) {
             Some((fid, _)) => {
                 let _ = fs.delete(fid);
                 Sw::OK
@@ -265,7 +277,7 @@ impl<'a> OathApplet<'a> {
         }
         let data = &apdu.data[..apdu.nc];
         if data.is_empty() {
-            let _ = fs.delete(EF_OATH_CODE);
+            let _ = fs.delete_key(EF_OATH_CODE);
             self.validated = true;
             return Sw::OK;
         }
@@ -273,7 +285,7 @@ impl<'a> OathApplet<'a> {
             return Sw::INCORRECT_PARAMS;
         };
         if key.is_empty() {
-            let _ = fs.delete(EF_OATH_CODE);
+            let _ = fs.delete_key(EF_OATH_CODE);
             self.validated = true;
             return Sw::OK;
         }
@@ -292,7 +304,8 @@ impl<'a> OathApplet<'a> {
             return Sw::DATA_INVALID;
         }
         self.rng.borrow_mut().fill(&mut self.challenge);
-        if fs.put(EF_OATH_CODE, key).is_err() {
+        let dev = self.device();
+        if !seal::seal_put(&dev, fs, &mut *self.rng.borrow_mut(), EF_OATH_CODE, key) {
             return Sw::MEMORY_FAILURE;
         }
         self.validated = false;
@@ -308,7 +321,7 @@ impl<'a> OathApplet<'a> {
         for &fid in &fids[..n] {
             let _ = fs.delete(fid);
         }
-        let _ = fs.delete(EF_OATH_CODE);
+        let _ = fs.delete_key(EF_OATH_CODE);
         let _ = fs.delete(EF_OTP_PIN);
         self.validated = true;
         Sw::OK
@@ -322,9 +335,10 @@ impl<'a> OathApplet<'a> {
         let ext = apdu.nc == 1 && apdu.data[0] == 0x01;
         let mut fids = [0u16; MAX_OATH_CRED as usize];
         let nfids = present_creds(fs, &mut fids);
+        let dev = self.device();
         let mut scratch = [0u8; CRED_MAX];
         for &fid in &fids[..nfids] {
-            let Some(n) = fs.read(fid, &mut scratch) else {
+            let Some(n) = seal::seal_read(&dev, fs, KeyFid::new(fid), &mut scratch) else {
                 continue;
             };
             let blob = &scratch[..n.min(CRED_MAX)];
@@ -374,7 +388,8 @@ impl<'a> OathApplet<'a> {
             return Sw::INCORRECT_PARAMS;
         };
         let mut code = [0u8; 128];
-        let Some(n) = fs.read(EF_OATH_CODE, &mut code) else {
+        let dev = self.device();
+        let Some(n) = seal::seal_read(&dev, fs, EF_OATH_CODE, &mut code) else {
             self.validated = true;
             return Sw::DATA_INVALID;
         };
@@ -416,7 +431,8 @@ impl<'a> OathApplet<'a> {
             return Sw::INCORRECT_PARAMS;
         };
         let mut scratch = [0u8; CRED_MAX];
-        let Some((fid, n)) = find_cred(fs, name, &mut scratch) else {
+        let dev = self.device();
+        let Some((fid, n)) = find_cred(&dev, fs, name, &mut scratch) else {
             return Sw::DATA_INVALID;
         };
         let blob = &scratch[..n];
@@ -460,7 +476,13 @@ impl<'a> OathApplet<'a> {
             counter.copy_from_slice(&scratch[r.start..r.start + 8]);
             let v = u64::from_be_bytes(counter).wrapping_add(1);
             scratch[r.start..r.start + 8].copy_from_slice(&v.to_be_bytes());
-            if fs.put(fid, &scratch[..n]).is_err() {
+            if !seal::seal_put(
+                &dev,
+                fs,
+                &mut *self.rng.borrow_mut(),
+                KeyFid::new(fid),
+                &scratch[..n],
+            ) {
                 return Sw::MEMORY_FAILURE;
             }
         }
@@ -484,9 +506,10 @@ impl<'a> OathApplet<'a> {
         };
         let mut fids = [0u16; MAX_OATH_CRED as usize];
         let nfids = present_creds(fs, &mut fids);
+        let dev = self.device();
         let mut scratch = [0u8; CRED_MAX];
         for &fid in &fids[..nfids] {
-            let Some(n) = fs.read(fid, &mut scratch) else {
+            let Some(n) = seal::seal_read(&dev, fs, KeyFid::new(fid), &mut scratch) else {
                 continue;
             };
             let blob = &scratch[..n.min(CRED_MAX)];
@@ -537,7 +560,8 @@ impl<'a> OathApplet<'a> {
         }
         // The named credential is ignored — slot 0 is always the one verified.
         let mut scratch = [0u8; CRED_MAX];
-        let Some(n) = fs.read(EF_OATH_CRED, &mut scratch) else {
+        let dev = self.device();
+        let Some(n) = seal::seal_read(&dev, fs, KeyFid::new(EF_OATH_CRED), &mut scratch) else {
             return Sw::DATA_INVALID;
         };
         let blob = &scratch[..n.min(CRED_MAX)];
@@ -591,7 +615,8 @@ impl<'a> OathApplet<'a> {
             return SW_WRONG_DATA;
         }
         let mut scratch = [0u8; CRED_MAX];
-        let Some((fid, n)) = find_cred(fs, name, &mut scratch) else {
+        let dev = self.device();
+        let Some((fid, n)) = find_cred(&dev, fs, name, &mut scratch) else {
             return Sw::DATA_INVALID;
         };
         // Rebuild the blob with the name TLV replaced in place.
@@ -610,9 +635,16 @@ impl<'a> OathApplet<'a> {
         if !ok {
             return Sw::FILE_FULL;
         }
-        match fs.put(fid, &blob[..bn]) {
-            Ok(()) => Sw::OK,
-            Err(_) => Sw::MEMORY_FAILURE,
+        if seal::seal_put(
+            &dev,
+            fs,
+            &mut *self.rng.borrow_mut(),
+            KeyFid::new(fid),
+            &blob[..bn],
+        ) {
+            Sw::OK
+        } else {
+            Sw::MEMORY_FAILURE
         }
     }
 
@@ -637,7 +669,8 @@ impl<'a> OathApplet<'a> {
             return SW_WRONG_DATA;
         };
         let mut scratch = [0u8; CRED_MAX];
-        let Some((_, n)) = find_cred(fs, name, &mut scratch) else {
+        let dev = self.device();
+        let Some((_, n)) = find_cred(&dev, fs, name, &mut scratch) else {
             return Sw::DATA_INVALID;
         };
         let blob = &scratch[..n];
@@ -740,7 +773,7 @@ impl<S: Storage> Applet<Fs<S>> for OathApplet<'_> {
         res.push(TAG_NAME);
         res.push(8);
         res.extend(&self.serial_name());
-        let code_set = fs.has_data(EF_OATH_CODE);
+        let code_set = fs.has_key(EF_OATH_CODE);
         if code_set {
             self.rng.borrow_mut().fill(&mut self.challenge);
             res.push(TAG_CHALLENGE);
@@ -845,18 +878,62 @@ fn present_creds<S: Storage>(fs: &mut Fs<S>, out: &mut [u16; MAX_OATH_CRED as us
 
 /// Find a present credential whose `TAG_NAME` equals `name`; the blob is left in
 /// `buf`. Only present slots are read (see [`present_creds`]).
-fn find_cred<S: Storage>(fs: &mut Fs<S>, name: &[u8], buf: &mut [u8]) -> Option<(u16, usize)> {
+fn find_cred<S: Storage>(
+    dev: &Device,
+    fs: &mut Fs<S>,
+    name: &[u8],
+    buf: &mut [u8],
+) -> Option<(u16, usize)> {
     let mut fids = [0u16; MAX_OATH_CRED as usize];
     let nfids = present_creds(fs, &mut fids);
     for &fid in &fids[..nfids] {
-        if let Some(n) = fs.read(fid, buf) {
-            let n = n.min(buf.len());
-            if find_tag(&buf[..n], TAG_NAME as u16) == Some(name) {
-                return Some((fid, n));
-            }
+        if let Some(n) = seal::seal_read(dev, fs, KeyFid::new(fid), buf)
+            && find_tag(&buf[..n], TAG_NAME as u16) == Some(name)
+        {
+            return Some((fid, n));
         }
     }
     None
+}
+
+/// Boot pass: seal any OATH secret slot still stored as legacy plaintext. A blob
+/// that already unseals is left alone; one that does not is taken to be a
+/// pre-seal plaintext credential and re-sealed in place. Covers every present
+/// credential and the SET CODE key. Idempotent and crash-safe per slot — GCM
+/// authentication tells the sealed and plaintext generations apart — so it can
+/// run unconditionally at every boot (see `firmware/src/main.rs`), before any
+/// host command touches a credential. Closes the one applet that historically
+/// stored its secrets in the clear (FIDO / PIV / OpenPGP always sealed theirs).
+pub fn migrate_seal<S: Storage>(dev: &Device, fs: &mut Fs<S>, rng: &mut dyn Rng) {
+    let mut fids = [0u16; MAX_OATH_CRED as usize];
+    let n = present_creds(fs, &mut fids);
+    let mut out = [0u8; CRED_MAX];
+    let mut raw = [0u8; CRED_MAX];
+    for &fid in &fids[..n] {
+        reseal_if_plaintext(dev, fs, rng, KeyFid::new(fid), &mut out, &mut raw);
+    }
+    reseal_if_plaintext(dev, fs, rng, EF_OATH_CODE, &mut out, &mut raw);
+    out.zeroize();
+    raw.zeroize();
+}
+
+/// Re-seal `fid` iff its stored bytes do not already authenticate as a sealed
+/// blob (legacy plaintext). No-op when the slot is absent or already sealed.
+fn reseal_if_plaintext<S: Storage>(
+    dev: &Device,
+    fs: &mut Fs<S>,
+    rng: &mut dyn Rng,
+    fid: KeyFid,
+    out: &mut [u8],
+    raw: &mut [u8],
+) {
+    if seal::seal_read(dev, fs, fid, out).is_some() {
+        return; // already sealed
+    }
+    if let Some(n) = fs.read_key(fid, raw) {
+        let n = n.min(raw.len());
+        let _ = seal::seal_put(dev, fs, rng, fid, &raw[..n]);
+    }
 }
 
 fn free_slot<S: Storage>(fs: &mut Fs<S>) -> Option<u16> {
@@ -1235,6 +1312,85 @@ mod tests {
         );
         assert_eq!(calc_code(&mut app, &mut fs, b"t", 1, 8), 94287082);
         assert_eq!(deny.borrow().1, 0);
+    }
+
+    #[test]
+    fn cred_secret_is_sealed_on_flash() {
+        // The whole point of the seal: an enrolled credential's HMAC secret must
+        // not sit in the clear on flash, and the seal must still round-trip.
+        let mut fs = new_fs();
+        let rng = RefCell::new(CountRng(7));
+        let touch = RefCell::new(StubPresence(Presence::Confirmed, 0));
+        let mut app = OathApplet::new(SERIAL, [0x22; 32], None, &rng, &touch);
+        assert_eq!(
+            put(
+                &mut app,
+                &mut fs,
+                &put_data(b"acct", 0x21, 8, SECRET_SHA1, false, None)
+            ),
+            Sw::OK
+        );
+
+        let mut fids = [0u16; MAX_OATH_CRED as usize];
+        assert_eq!(present_creds(&mut fs, &mut fids), 1);
+        let mut raw = [0u8; CRED_MAX];
+        let len = fs.read(fids[0], &mut raw).unwrap();
+        assert!(
+            !raw[..len]
+                .windows(SECRET_SHA1.len())
+                .any(|w| w == SECRET_SHA1),
+            "OATH HMAC secret stored in plaintext on flash",
+        );
+        // The seal round-trips — the RFC 6238 SHA-1 vector still computes.
+        assert_eq!(calc_code(&mut app, &mut fs, b"acct", 1, 8), 94287082);
+    }
+
+    #[test]
+    fn legacy_plaintext_cred_migrates_and_stays_usable() {
+        // A credential enrolled before sealing existed is stored as a bare TLV
+        // with the secret in the clear. The boot pass must seal it in place
+        // without losing it.
+        let mut fs = new_fs();
+        let rng = RefCell::new(CountRng(7));
+        let touch = RefCell::new(StubPresence(Presence::Confirmed, 0));
+        let mut app = OathApplet::new(SERIAL, [0x22; 32], None, &rng, &touch);
+
+        // Pre-seal layout: NAME ‖ KEY(type|alg, digits, secret), written raw.
+        let mut blob = tlv(TAG_NAME, b"acct");
+        let mut key = vec![0x21u8, 8];
+        key.extend_from_slice(SECRET_SHA1);
+        blob.extend(tlv(TAG_KEY, &key));
+        fs.put(EF_OATH_CRED, &blob).unwrap();
+        let mut raw = [0u8; CRED_MAX];
+        let len = fs.read(EF_OATH_CRED, &mut raw).unwrap();
+        assert!(
+            raw[..len]
+                .windows(SECRET_SHA1.len())
+                .any(|w| w == SECRET_SHA1),
+            "fixture should start as plaintext",
+        );
+
+        // Boot migration seals it (device must match the applet's identity).
+        let dev = Device {
+            serial_hash: &[0x22; 32],
+            serial_id: &SERIAL,
+            otp_key: None,
+        };
+        let mut mrng = CountRng(1);
+        migrate_seal(&dev, &mut fs, &mut mrng);
+
+        let len = fs.read(EF_OATH_CRED, &mut raw).unwrap();
+        assert!(
+            !raw[..len]
+                .windows(SECRET_SHA1.len())
+                .any(|w| w == SECRET_SHA1),
+            "migration left the OATH secret in plaintext",
+        );
+        // The credential is still usable: CALCULATE unseals and computes.
+        assert_eq!(calc_code(&mut app, &mut fs, b"acct", 1, 8), 94287082);
+        // Idempotent: a second pass is a no-op (it already authenticates).
+        migrate_seal(&dev, &mut fs, &mut mrng);
+        assert_eq!(calc_code(&mut app, &mut fs, b"acct", 1, 8), 94287082);
     }
 
     #[test]

@@ -13,6 +13,81 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
 
 ## [Unreleased]
 
+## [0.2.4] — 2026-06-19
+
+### Added
+
+- **The `rsk` CLI can run without Nix.** A `tools/pyproject.toml` packages the
+  CLI so it installs from any Python ≥ 3.9 toolchain —
+  `uvx --from ./tools rsk …`, `uv tool install ./tools`, `pipx install ./tools`,
+  or plain `pip`. The Nix dev shell stays the primary, pinned path; this mirrors
+  its CLI runtime deps (`hidapi`, `cryptography`, `pyscard`, `fido2`,
+  `mnemonic`, `shamir-mnemonic`) for hosts without Nix. See
+  [tools/README.md](tools/README.md). Host-tool only; no `bcdDevice` bump.
+
+### Changed
+
+- **FIDO2 PIN entry is now uniform across the CLI.** Commands disagreed on how
+  to take a PIN: most accepted only `--pin` (and aborted on a PIN-protected
+  device when it was omitted), while `fido list-passkeys` and `fido set-pin`
+  prompted interactively with no flag at all. Every PIN-gated command (`backup
+  export`/`restore`, `audit log`/`verify`, `lock enable`/`disable`, `inventory
+  verify`, `fido list-passkeys`/`set-pin`/`attestation import`/`clear`) now
+  accepts the PIN **either** way — `--pin` flag **or** an interactive prompt —
+  through one chokepoint (`rsk.common.resolve_pin`) that only prompts when the
+  device actually has a PIN, so touch-only devices are never asked. Host-tool
+  only; no `bcdDevice` bump.
+- **The `rsk-tui` cockpit now routes PIN entry through one chokepoint too.** Its
+  four per-action PIN steps collapsed into a single `App::gate_pin` +
+  `Step::PinThenRun`, so "prompt for the FIDO2 PIN iff the device has one, else
+  run" lives in exactly one place (mirroring the CLI's `resolve_pin`). PIN-vs-
+  phrase collection in the modal flow is now explicit instead of a catch-all (a
+  stray text input can no longer land in the PIN buffer), and the four
+  `device requires a PIN` strings were unified. No behaviour change for users;
+  host-tool only, no `bcdDevice` bump.
+
+### Fixed
+
+- **`rsk secure-boot` no longer refuses provisioning on a chip with a benign
+  `LOCK_NS`.** `pages_locked()` read the whole OTP lock row, so a pre-set
+  non-secure-page lock (`LOCK_NS=1`, `0x040404`) looked like a bootloader lock
+  and wrongly blocked `load-key`; it now masks `LOCK_BL` specifically. Host-tool
+  only; a mutation-proven regression test was added.
+
+### Security
+
+- **Transparency-log monitoring for our release signing identity.** A scheduled
+  GitHub Action (`sigstore/rekor-monitor`) watches the Rekor log for entries
+  signed under our release workflow's OIDC identity, so illegitimate use of it —
+  a signature we did not produce — becomes detectable, complementing the SLSA
+  Build L3 provenance. CI only; see `docs/supply-chain.md`.
+- **OATH credential secrets are now sealed at rest.** Every other applet
+  (FIDO, PIV, OpenPGP, rescue) AES-encrypts its keys before they reach flash;
+  OATH alone stored its TOTP/HOTP shared secrets — and the SET CODE key — as
+  plaintext TLV. They are now AES-256-GCM-sealed under the device `kbase`
+  (`HKDF(serial_hash, kbase, "OATH/KEYS")`), the same device-seal the PIV slot
+  keys use. A one-time boot migration re-seals any credential enrolled before
+  this release, so existing accounts keep working. With the OTP MKEK burned, an
+  extracted flash image no longer reveals OATH secrets. `bcdDevice` `0x0765` →
+  `0x0766`.
+- **The at-rest seal path is now enforced by types, not convention.** A slot
+  that holds a sealed secret is a `KeyFid`, distinct from a plaintext `u16` file
+  id, and the only writer that accepts one is `Fs::put_key(KeyFid, Sealed)` —
+  where `Sealed` is produced only by a seal routine. A stray
+  `fs.put(key_fid, raw_secret)` no longer compiles (asserted by a `compile_fail`
+  doctest). This is the chokepoint whose absence let OATH ship its secrets in
+  the clear; every applet's key FIDs were moved onto it.
+- **Resident-credential RP domains are now boxed at rest.** A discoverable
+  credential's `EF_RP` record stored the relying-party id (the site's domain)
+  in cleartext, so a flash dump revealed the *list of sites you hold passkeys
+  for* — a privacy leak, even though the keys themselves were sealed. The domain
+  is now ChaCha20-Poly1305-boxed under the device seed (the same seal the
+  credential body uses), with the rpId **hash** kept in cleartext as the O(1)
+  lookup key. A boot migration re-boxes records enrolled before this release.
+  Honest residual: the rpId hash remains, so a dump can still *dictionary-attack*
+  guessable domains — but the plaintext site list is gone. `bcdDevice` `0x0766`
+  → `0x0767`.
+
 ## [0.2.3] — 2026-06-18
 
 ### Changed
