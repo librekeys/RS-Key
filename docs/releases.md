@@ -23,8 +23,9 @@ which builds every artifact reproducibly, hashes it, and signs the manifest.
   YubiKey-interop identity, build `VIDPID=Yubikey5` yourself ([build.md](build.md)).
 - **`SHA256SUMS`** — a checksum for every image and the SBOM.
 - **`SHA256SUMS.cosign.bundle`** — a keyless [cosign](https://docs.sigstore.dev/)
-  signature of `SHA256SUMS` (sigstore/Fulcio; the signer is the release workflow's
-  GitHub OIDC identity, logged in Rekor).
+  signature of `SHA256SUMS` (sigstore/Fulcio; the signer is the reusable build
+  workflow's GitHub OIDC identity — `release-build.yml`, see the verify step
+  below — logged in Rekor).
 - **`rs-key-<tag>-sbom.cdx.json`** — a CycloneDX software bill of materials for the
   firmware's dependency tree.
 
@@ -40,9 +41,12 @@ Grab the images you want plus `SHA256SUMS` and `SHA256SUMS.cosign.bundle`.
 
 ```sh
 # 1. the checksums file is authentic (keyless cosign — needs cosign >= 2.0)
+#    The signer is the *reusable* build workflow (release-build.yml), not the
+#    thin release.yml caller: a workflow_call job's OIDC identity is its own
+#    job_workflow_ref, so that is what the Fulcio cert's SAN carries.
 cosign verify-blob \
   --bundle SHA256SUMS.cosign.bundle \
-  --certificate-identity-regexp '^https://github\.com/TheMaxMur/RS-Key/\.github/workflows/release\.yml@refs/tags/v.*' \
+  --certificate-identity-regexp '^https://github\.com/TheMaxMur/RS-Key/\.github/workflows/release-build\.yml@refs/tags/v.*' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
   SHA256SUMS
 
