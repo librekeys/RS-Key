@@ -23,7 +23,7 @@ import os
 import sys
 
 from .backup import _gated, _vendor
-from .common import connect_fido, die
+from .common import add_pin_arg, connect_fido, device_has_pin, die, resolve_pin
 
 AUDIT_READ, AUDIT_CHECKPOINT = 7, 8
 ENTRY_LEN = 20
@@ -57,11 +57,11 @@ def register(sub):
     g = p.add_subparsers(dest="cmd", required=True)
 
     lg = g.add_parser("log", help="export and print the journal")
-    lg.add_argument("--pin", help="FIDO2 PIN (required if one is set)")
+    add_pin_arg(lg)
     lg.set_defaults(func=cmd_log)
 
     v = g.add_parser("verify", help="log + DEVK-signed chain checkpoint (touch)")
-    v.add_argument("--pin", help="FIDO2 PIN (required if one is set)")
+    add_pin_arg(v)
     v.add_argument("--expect-key", help="pin the attestation pubkey (hex SEC1, from a prior verify)")
     v.set_defaults(func=cmd_verify)
 
@@ -77,7 +77,7 @@ def read_journal(dev, cid, pin):
     """AUDIT_READ → (start, seq_next, epoch, entries bytes)."""
     st, m = _vendor(dev, cid, _gated(AUDIT_READ, None, dev, cid, pin))
     if st == 0x36:
-        die("device requires a PIN — pass --pin")
+        die("device requires a PIN — pass --pin or enter it when prompted")
     if st != 0:
         die(f"audit read failed: {st:#x}")
     start, seq_next, epoch, entries = m[1], m[2], m[3], m[4]
@@ -99,7 +99,8 @@ def print_entries(entries):
 
 def cmd_log(args):
     dev, cid = connect_fido()
-    start, seq_next, epoch, entries = read_journal(dev, cid, args.pin)
+    pin = resolve_pin(args, has_pin=device_has_pin(dev, cid))
+    start, seq_next, epoch, entries = read_journal(dev, cid, pin)
     print(f"window [{start}, {seq_next})  —  {seq_next - start} entries, "
           f"{start} folded into the epoch")
     print(f"epoch : {epoch.hex()}")
@@ -109,13 +110,14 @@ def cmd_log(args):
 
 def cmd_verify(args):
     dev, cid = connect_fido()
-    start, seq_next, epoch, entries = read_journal(dev, cid, args.pin)
+    pin = resolve_pin(args, has_pin=device_has_pin(dev, cid))
+    start, seq_next, epoch, entries = read_journal(dev, cid, pin)
     head_local = _fold(epoch, entries)
 
     challenge = os.urandom(16)
     print("touch the device (BOOTSEL) to sign the checkpoint…", file=sys.stderr)
     st, m = _vendor(dev, cid,
-                    _gated(AUDIT_CHECKPOINT, {1: challenge}, dev, cid, args.pin))
+                    _gated(AUDIT_CHECKPOINT, {1: challenge}, dev, cid, pin))
     if st == 0x30:
         die("checkpoint refused — no OTP DEVK provisioned (see docs/production.md)")
     if st == 0x27:

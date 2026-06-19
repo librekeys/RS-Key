@@ -13,6 +13,29 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
 
 ## [Unreleased]
 
+### Added
+
+- **The `rsk` CLI can run without Nix.** A `tools/pyproject.toml` packages the
+  CLI so it installs from any Python ≥ 3.9 toolchain —
+  `uvx --from ./tools rsk …`, `uv tool install ./tools`, `pipx install ./tools`,
+  or plain `pip`. The Nix dev shell stays the primary, pinned path; this mirrors
+  its CLI runtime deps (`hidapi`, `cryptography`, `pyscard`, `fido2`,
+  `mnemonic`, `shamir-mnemonic`) for hosts without Nix. See
+  [tools/README.md](tools/README.md). Host-tool only; no `bcdDevice` bump.
+
+### Changed
+
+- **FIDO2 PIN entry is now uniform across the CLI.** Commands disagreed on how
+  to take a PIN: most accepted only `--pin` (and aborted on a PIN-protected
+  device when it was omitted), while `fido list-passkeys` and `fido set-pin`
+  prompted interactively with no flag at all. Every PIN-gated command (`backup
+  export`/`restore`, `audit log`/`verify`, `lock enable`/`disable`, `inventory
+  verify`, `fido list-passkeys`/`set-pin`/`attestation import`/`clear`) now
+  accepts the PIN **either** way — `--pin` flag **or** an interactive prompt —
+  through one chokepoint (`rsk.common.resolve_pin`) that only prompts when the
+  device actually has a PIN, so touch-only devices are never asked. Host-tool
+  only; no `bcdDevice` bump.
+
 ### Security
 
 - **OATH credential secrets are now sealed at rest.** Every other applet

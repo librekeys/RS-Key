@@ -157,6 +157,11 @@ Inside the dev shell two commands are on `PATH`:
 - **`rsk-tui`** — a terminal dashboard for day-to-day reads and a few in-band
   actions ([guide](docs/guides/tui.md); `rsk-tui --demo` needs no hardware)
 
+Without the dev shell, `rsk` also runs on a plain Python ≥ 3.9 toolchain via
+[uv](https://docs.astral.sh/uv/) or pip — `uvx --from ./tools rsk status`,
+`uv tool install ./tools`, or `pipx install ./tools`. Details and the native-lib
+notes are in [tools/README.md](tools/README.md).
+
 Separately, **`rsk-wipe`** is a RAM-only flash-erase *image* you flash
 deliberately to wipe a board for clean-slate testing — it is built and flashed
 like firmware, not run from `PATH` ([rsk-wipe/README.md](rsk-wipe/README.md)).

@@ -9,7 +9,7 @@ list-passkeys: list discoverable credentials via credentialManagement (needs PIN
 import sys
 from getpass import getpass
 
-from .common import die
+from .common import add_pin_arg, device_has_pin, die, resolve_pin
 
 try:
     from fido2.hid import CtapHidDevice
@@ -23,18 +23,23 @@ except ImportError:
 def register(sub):
     p = sub.add_parser("fido", help="FIDO2 management (set PIN, list passkeys, attestation)")
     g = p.add_subparsers(dest="cmd", required=True)
-    g.add_parser("set-pin", help="set or change the FIDO2 clientPIN").set_defaults(func=set_pin)
-    g.add_parser("list-passkeys", help="list discoverable credentials").set_defaults(func=list_passkeys)
+    sp = g.add_parser("set-pin", help="set or change the FIDO2 clientPIN")
+    add_pin_arg(sp, help="current FIDO2 PIN, when changing (prompted if omitted)")
+    sp.add_argument("--new-pin", help="new FIDO2 PIN (prompted, with confirmation, if omitted)")
+    sp.set_defaults(func=set_pin)
+    lp = g.add_parser("list-passkeys", help="list discoverable credentials")
+    add_pin_arg(lp)
+    lp.set_defaults(func=list_passkeys)
 
     a = g.add_parser("attestation", help="org attestation key/chain (enterprise)")
     ga = a.add_subparsers(dest="acmd", required=True)
     i = ga.add_parser("import", help="install an org attestation key + cert chain")
     i.add_argument("--key", required=True, help="P-256 private key (PEM)")
     i.add_argument("--chain", required=True, help="cert chain, leaf first (PEM or concatenated DER)")
-    i.add_argument("--pin", help="FIDO2 PIN (required if one is set)")
+    add_pin_arg(i)
     i.set_defaults(func=att_import)
     c = ga.add_parser("clear", help="remove the org attestation")
-    c.add_argument("--pin", help="FIDO2 PIN (required if one is set)")
+    add_pin_arg(c)
     c.set_defaults(func=att_clear)
     ga.add_parser("status", help="show whether an org attestation is installed").set_defaults(
         func=att_status)
@@ -58,13 +63,16 @@ def set_pin(args):
     if has_pin is None:
         die("device does not support clientPin")
     cp = ClientPin(ctap)
-    new = getpass("New FIDO2 PIN (4-63 chars): ")
+    new = args.new_pin
+    if new is None:  # interactive: enter twice; a --new-pin is trusted as typed
+        new = getpass("New FIDO2 PIN (4-63 chars): ")
+        if getpass("Repeat new PIN: ") != new:
+            die("PINs do not match")
     if len(new) < 4:
         die("PIN too short (min 4)")
-    if getpass("Repeat new PIN: ") != new:
-        die("PINs do not match")
     if has_pin:
-        cp.change_pin(getpass("Current PIN: "), new)
+        current = resolve_pin(args, has_pin=True, prompt="Current PIN: ", required=True)
+        cp.change_pin(current, new)
         print("FIDO2 PIN changed.")
     else:
         cp.set_pin(new)
@@ -79,7 +87,8 @@ def list_passkeys(args):
     if not ctap.info.options.get("clientPin"):
         die("no FIDO2 PIN set — set one first (rsk fido set-pin)")
     cp = ClientPin(ctap)
-    token = cp.get_pin_token(getpass("FIDO2 PIN: "), ClientPin.PERMISSION.CREDENTIAL_MGMT)
+    pin = resolve_pin(args, has_pin=True, required=True)
+    token = cp.get_pin_token(pin, ClientPin.PERMISSION.CREDENTIAL_MGMT)
     cm = CM(ctap, cp.protocol, token)
     meta = cm.get_metadata()
     existing = meta[CM.RESULT.EXISTING_CRED_COUNT]
@@ -138,13 +147,14 @@ def att_import(args):
     if len(chain) > 2048:
         die(f"chain too large ({len(chain)} B, max 2048)")
     dev, cid = connect_fido()
+    pin = resolve_pin(args, has_pin=device_has_pin(dev, cid))
     key, aad = mse_handshake(dev, cid)
     nonce = os.urandom(12)
     blob = nonce + ChaCha20Poly1305(key).encrypt(nonce, scalar, aad)
     print("touch the device (BOOTSEL) to authorise the import…", file=sys.stderr)
-    st, _ = _vendor(dev, cid, _gated(ATT_IMPORT, {1: blob, 2: chain}, dev, cid, args.pin))
+    st, _ = _vendor(dev, cid, _gated(ATT_IMPORT, {1: blob, 2: chain}, dev, cid, pin))
     if st == 0x36:
-        die("device requires a PIN — pass --pin")
+        die("device requires a PIN — pass --pin or enter it when prompted")
     if st != 0:
         die(f"import failed: {st:#x}")
     print("org attestation installed ✓ — EA makeCredential and U2F now use the org chain")
@@ -155,11 +165,12 @@ def att_clear(args):
     from .common import connect_fido
 
     dev, cid = connect_fido()
+    pin = resolve_pin(args, has_pin=device_has_pin(dev, cid))
     mse_handshake(dev, cid)
     print("touch the device (BOOTSEL) to remove the attestation…", file=sys.stderr)
-    st, _ = _vendor(dev, cid, _gated(ATT_CLEAR, None, dev, cid, args.pin))
+    st, _ = _vendor(dev, cid, _gated(ATT_CLEAR, None, dev, cid, pin))
     if st == 0x36:
-        die("device requires a PIN — pass --pin")
+        die("device requires a PIN — pass --pin or enter it when prompted")
     if st != 0:
         die(f"clear failed: {st:#x}")
     print("org attestation removed ✓ (back to the self-signed device cert)")
