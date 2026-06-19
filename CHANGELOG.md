@@ -13,6 +13,8 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
 
 ## [Unreleased]
 
+## [0.2.4] — 2026-06-19
+
 ### Added
 
 - **The `rsk` CLI can run without Nix.** A `tools/pyproject.toml` packages the
@@ -44,8 +46,21 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
   `device requires a PIN` strings were unified. No behaviour change for users;
   host-tool only, no `bcdDevice` bump.
 
+### Fixed
+
+- **`rsk secure-boot` no longer refuses provisioning on a chip with a benign
+  `LOCK_NS`.** `pages_locked()` read the whole OTP lock row, so a pre-set
+  non-secure-page lock (`LOCK_NS=1`, `0x040404`) looked like a bootloader lock
+  and wrongly blocked `load-key`; it now masks `LOCK_BL` specifically. Host-tool
+  only; a mutation-proven regression test was added.
+
 ### Security
 
+- **Transparency-log monitoring for our release signing identity.** A scheduled
+  GitHub Action (`sigstore/rekor-monitor`) watches the Rekor log for entries
+  signed under our release workflow's OIDC identity, so illegitimate use of it —
+  a signature we did not produce — becomes detectable, complementing the SLSA
+  Build L3 provenance. CI only; see `docs/supply-chain.md`.
 - **OATH credential secrets are now sealed at rest.** Every other applet
   (FIDO, PIV, OpenPGP, rescue) AES-encrypts its keys before they reach flash;
   OATH alone stored its TOTP/HOTP shared secrets — and the SET CODE key — as
