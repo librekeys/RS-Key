@@ -30,15 +30,14 @@ pub enum Flow {
 #[derive(Clone, Copy, Debug)]
 pub enum Step {
     ExportConfirmed,
-    ExportPin,
     RestorePhrase,
     RestoreConfirmed,
-    RestorePin,
     FinalizeConfirmed,
     RebootApp,
     RebootBootsel,
-    AuditPin,
-    VerifyPin,
+    /// PIN collected (or skipped) — now run this action. The single continuation
+    /// for every PIN-gated action; opened via `App::gate_pin`.
+    PinThenRun(Action),
 }
 
 pub enum Modal {
@@ -260,22 +259,8 @@ impl App {
     pub fn begin_action(&mut self, action: Action) -> Flow {
         match action {
             Action::Refresh | Action::LedGet | Action::LedCycle => Flow::Run(action),
-            Action::Verify => {
-                if self.pin_set() {
-                    self.open_pin(Step::VerifyPin);
-                    Flow::Continue
-                } else {
-                    Flow::Run(Action::Verify)
-                }
-            }
-            Action::AuditRead => {
-                if self.pin_set() {
-                    self.open_pin(Step::AuditPin);
-                    Flow::Continue
-                } else {
-                    Flow::Run(Action::AuditRead)
-                }
-            }
+            Action::Verify => self.gate_pin(Action::Verify),
+            Action::AuditRead => self.gate_pin(Action::AuditRead),
             Action::RebootApp => {
                 self.mode = AppMode::Modal(Modal::YesNo {
                     title: "reboot to app".into(),
@@ -375,8 +360,9 @@ impl App {
             Modal::Input { mut buf, then, .. } => {
                 match then {
                     Step::RestorePhrase => self.staging.phrase = Some(Zeroizing::new(buf.clone())),
-                    // every other Input step collects a PIN
-                    _ => self.staging.pin = Some(Zeroizing::new(buf.clone())),
+                    Step::PinThenRun(_) => self.staging.pin = Some(Zeroizing::new(buf.clone())),
+                    // Input modals only ever collect a restore phrase or a PIN.
+                    other => debug_assert!(false, "unexpected Input step: {other:?}"),
                 }
                 buf.zeroize();
                 self.advance(then)
@@ -387,15 +373,7 @@ impl App {
     /// Advance a confirmation flow to its next modal or to the run.
     fn advance(&mut self, step: Step) -> Flow {
         match step {
-            Step::ExportConfirmed => {
-                if self.pin_set() {
-                    self.open_pin(Step::ExportPin);
-                    Flow::Continue
-                } else {
-                    Flow::Run(Action::BackupExport)
-                }
-            }
-            Step::ExportPin => Flow::Run(Action::BackupExport),
+            Step::ExportConfirmed => self.gate_pin(Action::BackupExport),
             Step::RestorePhrase => {
                 self.open_confirm(
                     "restore seed".into(),
@@ -407,24 +385,28 @@ impl App {
                 );
                 Flow::Continue
             }
-            Step::RestoreConfirmed => {
-                if self.pin_set() {
-                    self.open_pin(Step::RestorePin);
-                    Flow::Continue
-                } else {
-                    Flow::Run(Action::BackupRestore)
-                }
-            }
-            Step::RestorePin => Flow::Run(Action::BackupRestore),
+            Step::RestoreConfirmed => self.gate_pin(Action::BackupRestore),
             Step::FinalizeConfirmed => Flow::Run(Action::BackupFinalize),
             Step::RebootApp => Flow::Run(Action::RebootApp),
             Step::RebootBootsel => Flow::Run(Action::RebootBootsel),
-            Step::AuditPin => Flow::Run(Action::AuditRead),
-            Step::VerifyPin => Flow::Run(Action::Verify),
+            Step::PinThenRun(action) => Flow::Run(action),
         }
     }
 
     // ---- modal helpers ----
+
+    /// The single PIN chokepoint: if the device has a clientPIN, open the masked
+    /// PIN prompt and run `action` once it is entered; otherwise run `action`
+    /// straight away. Every PIN-gated action routes through here, so "does this
+    /// need a PIN?" lives in exactly one place (mirrors the CLI's `resolve_pin`).
+    fn gate_pin(&mut self, action: Action) -> Flow {
+        if self.pin_set() {
+            self.open_pin(Step::PinThenRun(action));
+            Flow::Continue
+        } else {
+            Flow::Run(action)
+        }
+    }
 
     fn open_pin(&mut self, then: Step) {
         self.mode = AppMode::Modal(Modal::Input {
@@ -763,6 +745,32 @@ mod tests {
             panic!("expected confirm");
         }
         assert_eq!(a.submit_modal(), Flow::Run(Action::BackupExport));
+    }
+
+    #[test]
+    fn verify_gates_pin_through_the_chokepoint() {
+        let mut a = app(); // mock has client_pin = true
+        // A directly-gated action (no typed confirm first) opens the masked PIN.
+        assert_eq!(a.begin_action(Action::Verify), Flow::Continue);
+        match &mut a.mode {
+            AppMode::Modal(Modal::Input { mask, buf, .. }) => {
+                assert!(*mask);
+                *buf = "1234".into();
+            }
+            _ => panic!("expected PIN input"),
+        }
+        // The single PinThenRun continuation routes back to the right action.
+        assert_eq!(a.submit_modal(), Flow::Run(Action::Verify));
+        assert_eq!(a.staging.pin.as_deref().map(String::as_str), Some("1234"));
+    }
+
+    #[test]
+    fn verify_without_pin_runs_directly() {
+        let mut a = app();
+        a.snapshot.fido.client_pin = Some(false);
+        // No clientPIN → the chokepoint runs the action with no prompt.
+        assert_eq!(a.begin_action(Action::Verify), Flow::Run(Action::Verify));
+        assert!(matches!(a.mode, AppMode::Normal));
     }
 
     #[test]

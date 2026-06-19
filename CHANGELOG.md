@@ -35,6 +35,14 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
   through one chokepoint (`rsk.common.resolve_pin`) that only prompts when the
   device actually has a PIN, so touch-only devices are never asked. Host-tool
   only; no `bcdDevice` bump.
+- **The `rsk-tui` cockpit now routes PIN entry through one chokepoint too.** Its
+  four per-action PIN steps collapsed into a single `App::gate_pin` +
+  `Step::PinThenRun`, so "prompt for the FIDO2 PIN iff the device has one, else
+  run" lives in exactly one place (mirroring the CLI's `resolve_pin`). PIN-vs-
+  phrase collection in the modal flow is now explicit instead of a catch-all (a
+  stray text input can no longer land in the PIN buffer), and the four
+  `device requires a PIN` strings were unified. No behaviour change for users;
+  host-tool only, no `bcdDevice` bump.
 
 ### Security
 
