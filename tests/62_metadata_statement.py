@@ -56,7 +56,7 @@ REQUIRED = [
     "attestationRootCertificates", "authenticatorGetInfo",
 ]
 # Fields whose value tracks device state, not model identity.
-STATEFUL = {"forcePINChange", "minPINLength"}
+STATEFUL = {"forcePINChange", "minPINLength", "remainingDiscoverableCredentials"}
 STATEFUL_OPTIONS = {"ep", "clientPin"}
 
 
@@ -164,6 +164,12 @@ def part_b(stmt):
         "minPINLength": m[0x0D],
         "firmwareVersion": m[0x0E],
         "maxCredBlobLength": m[0x0F],
+        "transports": m[0x09],
+        "maxRPIDsForSetMinPINLength": m[0x10],
+        "remainingDiscoverableCredentials": m[0x14],
+        "attestationFormats": m[0x16],
+        "maxPINLength": m[0x1D],
+        "authenticatorConfigCommands": m[0x1F],
     }
     if COSE_MLDSA44 in {a["alg"] for a in live["algorithms"]}:
         print("NOTE: live device is an advertise-pqc build (COSE -48 present); "

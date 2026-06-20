@@ -86,6 +86,11 @@
     "minPINLength": 4,
     "firmwareVersion": 329476,
     "maxCredBlobLength": 128,
+    "transports": ["usb"],
+    "maxRPIDsForSetMinPINLength": 8,
+    "remainingDiscoverableCredentials": 256,
+    "attestationFormats": ["packed"],
+    "maxPINLength": 63,
     "authenticatorConfigCommands": [1, 2, 3]
   }
 }

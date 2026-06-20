@@ -137,6 +137,14 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
   `authenticatorReset`, which clears it. Completes the FIDO conformance "featureful"
   CTAP2.3 profile's authenticatorConfig requirement. `bcdDevice` `0x0774` → `0x0775`.
 
+- **`getInfo` advertises five optional informational members.** `transports`
+  (0x09, `["usb"]`), `maxRPIDsForSetMinPINLength` (0x10, `8`),
+  `remainingDiscoverableCredentials` (0x14, the live free resident-key-slot count),
+  `attestationFormats` (0x16, `["packed"]`) and `maxPINLength` (0x1D, `63`). Purely
+  informational — no behaviour change — and mirrored in the metadata statement (the
+  FIDO conformance Authr-Generic test strict-compares each member to it).
+  `bcdDevice` `0x0776` → `0x0777`.
+
 - **The `rsk` CLI can run without Nix.** A `tools/pyproject.toml` packages the
   CLI so it installs from any Python ≥ 3.9 toolchain —
   `uvx --from ./tools rsk …`, `uv tool install ./tools`, `pipx install ./tools`,

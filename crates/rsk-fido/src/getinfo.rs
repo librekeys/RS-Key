@@ -13,7 +13,8 @@ use minicbor::encode::{Error, Write};
 
 use crate::consts::{
     AAGUID, ALG_ES256, ALG_ES384, ALG_ES512, ALG_MLDSA44, FIRMWARE_VERSION, MAX_CRED_ID_LENGTH,
-    MAX_CREDBLOB_LENGTH, MAX_CREDENTIAL_COUNT_IN_LIST, MAX_LARGE_BLOB_SIZE, MAX_MSG_SIZE,
+    MAX_CREDBLOB_LENGTH, MAX_CREDENTIAL_COUNT_IN_LIST, MAX_LARGE_BLOB_SIZE, MAX_MIN_PIN_RPIDS,
+    MAX_MSG_SIZE,
 };
 use crate::cose::cose_public_key;
 use crate::error::{CtapError, CtapResult};
@@ -28,12 +29,14 @@ use crate::error::{CtapError, CtapResult};
 /// (`enableEnterpriseAttestation` / `toggleAlwaysUv`). Platforms (and the FIDO
 /// conformance tool) only exercise those paths when the option is present. Keep in
 /// sync with `metadata/rs-key.metadata.json`.
+/// `remaining_rk` is the live free discoverable-credential count (getInfo 0x14).
 pub fn get_info(
     pin_set: bool,
     min_pin_len: u8,
     force_change: bool,
     ea_enabled: bool,
     always_uv: bool,
+    remaining_rk: u16,
     out: &mut [u8],
 ) -> CtapResult {
     let mut enc = Encoder::new(minicbor::encode::write::Cursor::new(out));
@@ -44,6 +47,7 @@ pub fn get_info(
         force_change,
         ea_enabled,
         always_uv,
+        remaining_rk,
     )
     .map_err(|_| CtapError::Other)?;
     Ok(enc.writer().position())
@@ -56,9 +60,11 @@ fn write_info<W: Write>(
     force_change: bool,
     ea_enabled: bool,
     always_uv: bool,
+    remaining_rk: u16,
 ) -> Result<(), Error<W::Error>> {
-    // Keys are ascending uints → CTAP canonical order.
-    enc.map(15)?;
+    // Keys are ascending uints → CTAP canonical order (1-byte keys 0x01..0x16
+    // first, then the 2-byte keys 0x1D, 0x1F).
+    enc.map(20)?;
 
     // 0x01 versions — advertise the full backward-compatible superset up to
     // FIDO_2_3 (the implemented surface: credMgmt, largeBlobs, credProtect,
@@ -128,6 +134,11 @@ fn write_info<W: Write>(
     // 0x08 maxCredentialIdLength
     enc.u8(0x08)?.u64(MAX_CRED_ID_LENGTH)?;
 
+    // 0x09 transports — the FIDO interface is reachable over USB-HID only. (The
+    // device also presents a PC/SC smartcard interface, but the FIDO applet is on
+    // HID, so the FIDO transport list is just "usb".)
+    enc.u8(0x09)?.array(1)?.str("usb")?;
+
     // 0x0A algorithms — ES256 (-7), ES384 (-35), ES512 (-36); `advertise-pqc`
     // prepends ML-DSA-44 (off by default: shipped Firefoxes reject the whole
     // getInfo on an unknown COSE id). EdDSA (-8) and ES256K (-47) are implemented
@@ -163,6 +174,22 @@ fn write_info<W: Write>(
     // 0x0F maxCredBlobLength
     enc.u8(0x0F)?.u64(MAX_CREDBLOB_LENGTH as u64)?;
 
+    // 0x10 maxRPIDsForSetMinPINLength — how many RP-id hashes setMinPINLength's
+    // minPinLengthRPIDs list accepts.
+    enc.u8(0x10)?.u8(MAX_MIN_PIN_RPIDS as u8)?;
+
+    // 0x14 remainingDiscoverableCredentials — live estimate of free resident-key
+    // slots (capacity minus the occupied EF_CRED slots), supplied by the caller.
+    enc.u8(0x14)?.u16(remaining_rk)?;
+
+    // 0x16 attestationFormats — the attestation statement formats we emit.
+    enc.u8(0x16)?.array(1)?.str("packed")?;
+
+    // 0x1D maxPINLength — max PIN length in Unicode code points. The PIN is padded
+    // to 64 bytes on the wire, so the content is at most 63. A 2-byte CBOR key
+    // (29 > 23), so it sorts after the 1-byte keys but before 0x1F → canonical.
+    enc.u8(0x1D)?.u8(63)?;
+
     // 0x1F authenticatorConfigCommands — the authenticatorConfig (0x0D) subcommands
     // we support: enableEnterpriseAttestation (0x01), toggleAlwaysUv (0x02) and
     // setMinPINLength (0x03). The FIDO conformance AuthenticatorConfig suite requires
@@ -193,7 +220,7 @@ mod tests {
     #[test]
     fn algorithms_never_advertise_eddsa_or_es256k() {
         let mut out = [0u8; 1024];
-        let n = get_info(false, 6, false, false, false, &mut out).unwrap();
+        let n = get_info(false, 6, false, false, false, 256, &mut out).unwrap();
         let mut d = Decoder::new(&out[..n]);
         let entries = d.map().unwrap().unwrap();
         let mut algs = std::vec::Vec::new();
@@ -227,11 +254,11 @@ mod tests {
     #[test]
     fn get_info_fields() {
         let mut buf = [0u8; 512];
-        let n = get_info(true, 4, false, false, false, &mut buf).unwrap();
+        let n = get_info(true, 4, false, false, false, 200, &mut buf).unwrap();
         let mut d = Decoder::new(&buf[..n]);
 
         let entries = d.map().unwrap().unwrap();
-        assert_eq!(entries, 15);
+        assert_eq!(entries, 20);
 
         // 0x01 versions
         assert_eq!(d.u8().unwrap(), 0x01);
@@ -303,6 +330,11 @@ mod tests {
         assert_eq!(d.u8().unwrap(), 0x08);
         assert_eq!(d.u64().unwrap(), MAX_CRED_ID_LENGTH);
 
+        // 0x09 transports ["usb"]
+        assert_eq!(d.u8().unwrap(), 0x09);
+        assert_eq!(d.array().unwrap().unwrap(), 1);
+        assert_eq!(d.str().unwrap(), "usb");
+
         // 0x0A algorithms: [{alg, type:"public-key"} …] — classic ids; the
         // `advertise-pqc` feature prepends ML-DSA-44 (default stays without it:
         // Firefox authenticator-rs strict parse).
@@ -340,6 +372,23 @@ mod tests {
         assert_eq!(d.u8().unwrap(), 0x0F);
         assert_eq!(d.u64().unwrap(), MAX_CREDBLOB_LENGTH as u64);
 
+        // 0x10 maxRPIDsForSetMinPINLength
+        assert_eq!(d.u8().unwrap(), 0x10);
+        assert_eq!(d.u8().unwrap(), MAX_MIN_PIN_RPIDS as u8);
+
+        // 0x14 remainingDiscoverableCredentials (= the value passed in)
+        assert_eq!(d.u8().unwrap(), 0x14);
+        assert_eq!(d.u16().unwrap(), 200);
+
+        // 0x16 attestationFormats ["packed"]
+        assert_eq!(d.u8().unwrap(), 0x16);
+        assert_eq!(d.array().unwrap().unwrap(), 1);
+        assert_eq!(d.str().unwrap(), "packed");
+
+        // 0x1D maxPINLength
+        assert_eq!(d.u8().unwrap(), 0x1D);
+        assert_eq!(d.u8().unwrap(), 63);
+
         // 0x1F authenticatorConfigCommands [enableEnterpriseAttestation (0x01),
         // toggleAlwaysUv (0x02), setMinPINLength (0x03)]
         assert_eq!(d.u8().unwrap(), 0x1F);
@@ -357,7 +406,7 @@ mod tests {
         // options.clientPin is false before a PIN is set, true after.
         let mut buf = [0u8; 512];
         for pin_set in [false, true] {
-            let n = get_info(pin_set, 4, false, false, false, &mut buf).unwrap();
+            let n = get_info(pin_set, 4, false, false, false, 256, &mut buf).unwrap();
             let mut d = Decoder::new(&buf[..n]);
             d.map().unwrap();
             // skip to 0x04 options.
@@ -390,7 +439,7 @@ mod tests {
     fn min_pin_policy_reflected() {
         // 0x0D mirrors minPINLength, 0x0C the forceChangePin flag.
         let mut buf = [0u8; 512];
-        let n = get_info(true, 8, true, false, false, &mut buf).unwrap();
+        let n = get_info(true, 8, true, false, false, 256, &mut buf).unwrap();
         let mut d = Decoder::new(&buf[..n]);
         d.map().unwrap();
         let (mut force, mut min) = (None, None);
@@ -411,7 +460,7 @@ mod tests {
         // state: false at reset, true once EA has been enabled.
         for ea in [false, true] {
             let mut buf = [0u8; 512];
-            let n = get_info(true, 4, false, ea, false, &mut buf).unwrap();
+            let n = get_info(true, 4, false, ea, false, 256, &mut buf).unwrap();
             let mut d = Decoder::new(&buf[..n]);
             d.map().unwrap();
             for _ in 0..3 {
@@ -432,7 +481,7 @@ mod tests {
         // false at reset, true once alwaysUv has been enabled.
         for always_uv in [false, true] {
             let mut buf = [0u8; 512];
-            let n = get_info(true, 4, false, false, always_uv, &mut buf).unwrap();
+            let n = get_info(true, 4, false, false, always_uv, 256, &mut buf).unwrap();
             let mut d = Decoder::new(&buf[..n]);
             d.map().unwrap();
             for _ in 0..3 {
@@ -456,7 +505,7 @@ mod tests {
     fn get_info_buffer_too_small() {
         let mut tiny = [0u8; 8];
         assert_eq!(
-            get_info(false, 4, false, false, false, &mut tiny),
+            get_info(false, 4, false, false, false, 256, &mut tiny),
             Err(CtapError::Other)
         );
     }

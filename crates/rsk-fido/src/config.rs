@@ -17,7 +17,7 @@ use crate::cbordec::{cbor, def_arr, def_map};
 use crate::consts::{
     CONFIG_AUT_DISABLE, CONFIG_AUT_ENABLE, CONFIG_ENABLE_EA, CONFIG_SET_MIN_PIN,
     CONFIG_TOGGLE_ALWAYS_UV, CONFIG_VENDOR, CTAP_CONFIG, EF_ALWAYS_UV, EF_EA_ENABLED, EF_KEY_DEV,
-    EF_KEY_DEV_ENC, EF_MINPINLEN, EF_PIN, MIN_PIN_LENGTH,
+    EF_KEY_DEV_ENC, EF_MINPINLEN, EF_PIN, MAX_MIN_PIN_RPIDS, MIN_PIN_LENGTH,
 };
 use crate::error::{CtapError, CtapResult};
 use crate::journal;
@@ -27,9 +27,6 @@ use crate::vendor::open_channel_key;
 use crate::{Ctx, Rng};
 
 const MAX_RAW_SUBPARA: usize = 256;
-/// Max RP ids the setMinPINLength `minPinLengthRPIDs` list keeps; the
-/// raw-subpara MAC payload caps the practical count anyway.
-const MAX_MIN_PIN_RPIDS: usize = 8;
 
 struct Req<'a> {
     subcommand: u64,

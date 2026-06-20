@@ -142,12 +142,14 @@ pub fn process_cbor<S: Storage, R: Rng>(ctx: &mut Ctx<S, R>, data: &[u8], out: &
                 Some(n) if n >= 1 => (mp[0], n >= 2 && mp[1] == 1),
                 _ => (consts::MIN_PIN_LENGTH, false),
             };
+            let remaining_rk = credential::remaining_discoverable(ctx.fs);
             getinfo::get_info(
                 ctx.fs.has_data(consts::EF_PIN),
                 min_pin,
                 force,
                 ctx.fs.has_data(consts::EF_EA_ENABLED),
                 ctx.fs.has_data(consts::EF_ALWAYS_UV),
+                remaining_rk,
                 &mut out[1..],
             )
         }
@@ -219,8 +221,8 @@ mod tests {
         let n = dispatch(&[consts::CTAP_GET_INFO], &mut out);
         assert!(n > 1);
         assert_eq!(out[0], CTAP2_OK);
-        // The payload is the getInfo map (CBOR map header 0xAF = map(15)).
-        assert_eq!(out[1], 0xAF);
+        // The payload is the getInfo map (CBOR map header 0xB4 = map(20)).
+        assert_eq!(out[1], 0xB4);
     }
 
     #[test]

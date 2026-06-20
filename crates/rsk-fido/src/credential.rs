@@ -426,6 +426,17 @@ pub(crate) fn slot_map<S: Storage>(fs: &mut Fs<S>, base: u16, out: &mut [bool]) 
     });
 }
 
+/// Estimated free discoverable-credential slots (getInfo
+/// `remainingDiscoverableCredentials`, 0x14): capacity minus the occupied EF_CRED
+/// slots. Walks only the present-key index (cheap, in-RAM — safe on the getInfo
+/// hot path).
+pub(crate) fn remaining_discoverable<S: Storage>(fs: &mut Fs<S>) -> u16 {
+    let mut occupied = [false; MAX_RESIDENT_CREDENTIALS as usize];
+    slot_map(fs, EF_CRED, &mut occupied);
+    let used = occupied.iter().filter(|&&b| b).count() as u16;
+    MAX_RESIDENT_CREDENTIALS.saturating_sub(used)
+}
+
 /// Persist a resident credential into a free or matching EF_CRED slot and bump
 /// the EF_RP count.
 pub fn credential_store<S: Storage>(

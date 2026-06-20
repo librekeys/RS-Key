@@ -162,6 +162,9 @@ pub const LARGEBLOB_INITIAL: [u8; 17] = [
 
 /// Max resident credentials / relying parties.
 pub const MAX_RESIDENT_CREDENTIALS: u16 = 256;
+/// Max RP-id hashes the setMinPINLength `minPinLengthRPIDs` list keeps (getInfo
+/// `maxRPIDsForSetMinPINLength`, 0x10).
+pub const MAX_MIN_PIN_RPIDS: usize = 8;
 
 // FIDO flash file ids (device-local; fids never cross the wire).
 // Audit journal (journal.rs) — deliberately outside every reset range: FIDO's
