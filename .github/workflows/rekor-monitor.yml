@@ -40,7 +40,46 @@ concurrency:
   cancel-in-progress: false # never abort a run mid-checkpoint
 
 jobs:
+  # Self-heal the "death spiral". rekor-monitor persists its log position as a
+  # `checkpoint` GH artifact. If a run is cancelled by the reusable workflow's
+  # 60-min job timeout BEFORE it uploads a fresh checkpoint, the stale one is
+  # reused forever and every later run re-scans an ever-growing slice of the
+  # (~1.75-billion-entry, +400k/hr) Rekor log → another timeout → the monitor is
+  # wedged until the artifact is deleted by hand (happened 2026-06-20). This caps
+  # the damage at ONE cancelled run: if the previous run did not finish, drop the
+  # stuck checkpoint so the monitor below re-seeds to the current log size. The
+  # step is best-effort and always exits 0 — it must never block the monitor.
+  preflight:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write # read run conclusions + delete the stuck checkpoint artifact
+    steps:
+      - name: Reset a stuck checkpoint after a cancelled run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          last=$(gh api "repos/$REPO/actions/workflows/rekor-monitor.yml/runs?status=completed&per_page=1" \
+                   --jq '.workflow_runs[0].conclusion // "none"' 2>/dev/null || echo "none")
+          echo "previous completed rekor-monitor run: $last"
+          case "$last" in
+            cancelled | timed_out)
+              echo "::warning::previous run did not finish — deleting the stuck checkpoint so the monitor re-seeds"
+              gh api "repos/$REPO/actions/artifacts?name=checkpoint&per_page=100" \
+                --jq '.artifacts[].id' 2>/dev/null |
+                while read -r id; do
+                  gh api -X DELETE "repos/$REPO/actions/artifacts/$id" 2>/dev/null &&
+                    echo "deleted checkpoint artifact $id"
+                done
+              ;;
+            *)
+              echo "checkpoint healthy — nothing to reset"
+              ;;
+          esac
+          exit 0
+
   monitor:
+    needs: preflight
     permissions:
       contents: read # checkout the reusable workflow
       issues: write # file an issue when a watched identity appears
