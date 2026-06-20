@@ -21,7 +21,7 @@ replacement for an audited commercial key.
 ## Project status
 
 A working, single-maintainer hobby project under active development. The latest
-tagged release is **v0.2.4**; day to day the supported version is the tip of
+tagged release is **v0.2.5**; day to day the supported version is the tip of
 `main`, and every behavior change bumps the USB `bcdDevice` build counter so a
 build can be named precisely. Most of the protocol surface works against real host software; what
 has actually been checked on hardware (with dates) is in

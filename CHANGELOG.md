@@ -13,6 +13,8 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
 
 ## [Unreleased]
 
+## [0.2.5] — 2026-06-20
+
 ### Added
 
 - **Runtime LED hardware config — pin, driver, and wire order are now set at
@@ -66,6 +68,24 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
   the host keeps the ML-KEM keypair and decapsulates. A host that sends no key 2
   gets the classical channel byte-for-byte, so existing hosts keep working.
   `bcdDevice` `0x0777` → `0x0778`.
+
+- **`alwaysUv` (always require user verification) is supported.** `getInfo`
+  advertises the `options.alwaysUv` flag (reflecting its state, `false` at reset)
+  and the `toggleAlwaysUv` (`0x02`) `authenticatorConfig` subcommand. While enabled
+  (flipped via `authenticatorConfig` toggleAlwaysUv, gated on a pinUvAuthToken with
+  the `acfg` permission), every `makeCredential` / `getAssertion` requires a verified
+  pinUvAuthToken — an up-only (touch) request is refused with
+  `CTAP2_ERR_PUAT_REQUIRED`, even when no PIN is configured. The state persists until
+  `authenticatorReset`, which clears it. Completes the FIDO conformance "featureful"
+  CTAP2.3 profile's authenticatorConfig requirement. `bcdDevice` `0x0774` → `0x0775`.
+
+- **`getInfo` advertises five optional informational members.** `transports`
+  (0x09, `["usb"]`), `maxRPIDsForSetMinPINLength` (0x10, `8`),
+  `remainingDiscoverableCredentials` (0x14, the live free resident-key-slot count),
+  `attestationFormats` (0x16, `["packed"]`) and `maxPINLength` (0x1D, `63`). Purely
+  informational — no behaviour change — and mirrored in the metadata statement (the
+  FIDO conformance Authr-Generic test strict-compares each member to it).
+  `bcdDevice` `0x0776` → `0x0777`.
 
 ### Fixed
 
@@ -179,25 +199,9 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
   it). Mirrored in the metadata statement. Shares the `0x0774` bump (`0x02` arrived
   with alwaysUv at `0x0775`, below).
 
+## [0.2.4] — 2026-06-19
+
 ### Added
-
-- **`alwaysUv` (always require user verification) is supported.** `getInfo`
-  advertises the `options.alwaysUv` flag (reflecting its state, `false` at reset)
-  and the `toggleAlwaysUv` (`0x02`) `authenticatorConfig` subcommand. While enabled
-  (flipped via `authenticatorConfig` toggleAlwaysUv, gated on a pinUvAuthToken with
-  the `acfg` permission), every `makeCredential` / `getAssertion` requires a verified
-  pinUvAuthToken — an up-only (touch) request is refused with
-  `CTAP2_ERR_PUAT_REQUIRED`, even when no PIN is configured. The state persists until
-  `authenticatorReset`, which clears it. Completes the FIDO conformance "featureful"
-  CTAP2.3 profile's authenticatorConfig requirement. `bcdDevice` `0x0774` → `0x0775`.
-
-- **`getInfo` advertises five optional informational members.** `transports`
-  (0x09, `["usb"]`), `maxRPIDsForSetMinPINLength` (0x10, `8`),
-  `remainingDiscoverableCredentials` (0x14, the live free resident-key-slot count),
-  `attestationFormats` (0x16, `["packed"]`) and `maxPINLength` (0x1D, `63`). Purely
-  informational — no behaviour change — and mirrored in the metadata statement (the
-  FIDO conformance Authr-Generic test strict-compares each member to it).
-  `bcdDevice` `0x0776` → `0x0777`.
 
 - **The `rsk` CLI can run without Nix.** A `tools/pyproject.toml` packages the
   CLI so it installs from any Python ≥ 3.9 toolchain —
