@@ -29,10 +29,11 @@ cover it:
 |---|---|---|
 | `FLASH_SIZE` | `4M` | A board with a different QSPI flash chip (e.g. `8M`). `build.rs` regenerates `memory.x` from it. Must be ≥ ~2 MB and ≤ 16 MB. |
 | `LED_PIN` | `16` | A board that uses GPIO16 for something else, or wires its addressable LED elsewhere (RP2350A: GPIO `0..=29`). |
+| `LED_KIND` | `ws2812` | A board with a different indicator: `gpio` (a plain on/off LED on `LED_PIN`), `pimoroni` (3-pin PWM RGB, Pimoroni Tiny 2350), or `none`. Default `ws2812` is the Waveshare addressable RGB. |
 
 ```sh
-# example: an 8 MB board with its LED on GPIO25
-env FLASH_SIZE=8M LED_PIN=25 cargo build --release -p firmware
+# example: an 8 MB board with a plain LED on GPIO25
+env FLASH_SIZE=8M LED_KIND=gpio LED_PIN=25 cargo build --release -p firmware
 ```
 
 So most RP2350A boards work with at most a one-line change. Everything else

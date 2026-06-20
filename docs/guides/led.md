@@ -1,11 +1,14 @@
 # LED
 
-The on-board WS2812 RGB LED is the device's only display. On the reference
-board — the **Waveshare RP2350-One** — it sits on GPIO16. Boards without an
-addressable LED just run dark; nothing else changes. The data pin is a
-build-time knob (`LED_PIN`, any GPIO `0..=29`), so a board that wires its LED
-elsewhere points it at a free pin ([build.md](../build.md),
-[hardware.md](../hardware.md)).
+The status LED is the device's only display. On the reference board — the
+**Waveshare RP2350-One** — it's a WS2812 addressable RGB on GPIO16. The driver
+**backend** is a build-time knob (`LED_KIND`): `ws2812` (the addressable-RGB
+default), `gpio` (a plain on/off LED), `pimoroni` (a 3-pin PWM RGB — Pimoroni
+Tiny 2350), or `none`. The `ws2812`/`gpio` data pin is `LED_PIN` (any GPIO
+`0..=29`), so a board that wires its LED elsewhere points it at a free pin
+([build.md](../build.md), [hardware.md](../hardware.md)). A monochrome `gpio`
+LED can't show the status *colours* below, but the blink *pattern* still tells
+the four states apart; `none` boards just run dark.
 
 The LED runs on its own high-priority task, so it keeps animating even while
 the firmware blocks waiting for a touch or grinds through a long RSA keygen —

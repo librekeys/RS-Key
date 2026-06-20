@@ -15,6 +15,18 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
 
 ### Added
 
+- **Selectable LED backend (`LED_KIND` build knob) — the indicator is no longer
+  WS2812-only.** The status engine (boot/processing/touch/idle blink + the
+  runtime-configurable colour/brightness in `EF_LED_CONF`) was already
+  backend-agnostic; only the render half was hard-wired to the Waveshare's
+  addressable WS2812. The render is now chosen at build time: `ws2812` (default —
+  the addressable RGB on `LED_PIN`), `gpio` (a plain on/off LED on `LED_PIN`;
+  hue/brightness collapse to lit/unlit, but the blink *pattern* still tells the
+  statuses apart — so RS-Key now runs on boards with a simple LED, e.g. a bare
+  RP2350 or Pico 2), `pimoroni` (a 3-pin PWM common-anode RGB, Pimoroni Tiny 2350)
+  or `none` (headless). Only the selected driver and its PIO/PWM dependencies are
+  compiled. `bcdDevice` `0x0778` → `0x0779`.
+
 - **Hybrid post-quantum seed-backup channel — the vendor MSE key agreement is now
   P-256 + ML-KEM-768.** The seed-backup channel (`authenticatorVendor` `0x41`,
   `MSE`) is the one place the device hands out a normally non-exportable key — the

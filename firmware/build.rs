@@ -70,6 +70,17 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(led_pin, values({values}))");
     println!("cargo:rerun-if-env-changed=LED_PIN");
 
+    // LED backend (default `ws2812`, the Waveshare RP2350-One). Selected at
+    // compile time so only the chosen driver — and its dependencies (PIO, PWM) —
+    // is built. `gpio` = a plain on/off indicator, `pimoroni` = a 3-pin PWM RGB
+    // (Pimoroni Tiny 2350), `none` = headless.
+    let led_kind = resolve_led_kind();
+    println!("cargo:rustc-cfg=led_kind=\"{led_kind}\"");
+    println!(
+        "cargo:rustc-check-cfg=cfg(led_kind, values(\"ws2812\", \"gpio\", \"pimoroni\", \"none\"))"
+    );
+    println!("cargo:rerun-if-env-changed=LED_KIND");
+
     // Bake fake OTP keys into the image instead of reading the fuses — exercises
     // the kbase migration + boot path without an irreversible OTP write.
     // TEST BUILDS ONLY; never set for a shipped image.
@@ -164,6 +175,20 @@ fn resolve_led_pin() -> u8 {
         .unwrap_or_else(|_| panic!("LED_PIN={raw:?} must be a GPIO number 0..=29"));
     assert!(v <= 29, "LED_PIN={v} out of range 0..=29 (RP2350A GPIOs)");
     v
+}
+
+/// Resolve `LED_KIND` (the LED driver backend) to a known value; defaults to
+/// `ws2812`. One of: `ws2812` (addressable RGB on `LED_PIN`), `gpio` (a plain
+/// on/off LED on `LED_PIN`), `pimoroni` (3-pin PWM RGB, Pimoroni Tiny 2350), or
+/// `none` (no indicator).
+fn resolve_led_kind() -> String {
+    let raw = env::var("LED_KIND").unwrap_or_default();
+    let v = raw.trim().to_ascii_lowercase();
+    match v.as_str() {
+        "" | "ws2812" => "ws2812".into(), // unset / empty → the default backend
+        "gpio" | "pimoroni" | "none" => v,
+        _ => panic!("LED_KIND={raw:?} must be one of: ws2812, gpio, pimoroni, none"),
+    }
 }
 
 /// Validate a fake-OTP-key env var: exactly 64 hex chars (32 bytes), returned

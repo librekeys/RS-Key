@@ -19,7 +19,14 @@ use embassy_rp::flash::{Blocking, Flash};
 use embassy_rp::interrupt;
 use embassy_rp::interrupt::{InterruptExt, Priority};
 use embassy_rp::peripherals::{DMA_CH0, PIO0, TRNG, USB};
-use embassy_rp::pio::{InterruptHandler as PioIrq, Pio};
+use embassy_rp::pio::InterruptHandler as PioIrq;
+// The `ws2812` LED backend (the default LED_KIND) drives the addressable LED over
+// the PIO; gate its imports so `gpio`/`pimoroni`/`none` builds don't pull in the
+// PIO driver. DMA_CH0 and the PIO0/DMA IRQs stay bound unconditionally (the type
+// is used by `bind_interrupts!` below — harmless when the backend is unused).
+#[cfg(led_kind = "ws2812")]
+use embassy_rp::pio::Pio;
+#[cfg(led_kind = "ws2812")]
 use embassy_rp::pio_programs::ws2812::{PioWs2812, PioWs2812Program};
 use embassy_rp::trng::{Config as TrngConfig, InterruptHandler as TrngIrq, Trng};
 use embassy_rp::usb::{Driver as UsbDriver, InterruptHandler as UsbIrq};
@@ -252,7 +259,7 @@ async fn main(_spawner: Spawner) {
     config.serial_number = Some("rs-key-0001");
     config.max_power = 100;
     config.max_packet_size_0 = 64;
-    config.device_release = 0x0778; // bcdDevice: our build counter
+    config.device_release = 0x0779; // bcdDevice: our build counter
 
     let mut builder = Builder::new(
         driver,
@@ -328,25 +335,61 @@ async fn main(_spawner: Spawner) {
         hp.spawn(otp_kbd::kbd_task(kbd).unwrap());
     }
 
-    let Pio {
-        mut common, sm0, ..
-    } = Pio::new(p.PIO0, Irqs);
-    let program = PioWs2812Program::new(&mut common);
+    // LED backend, selected at build time by LED_KIND (build.rs → cfg(led_kind)).
+    // `ws2812`/`gpio` take their pin from LED_PIN via this macro — embassy's
+    // `Pin`/`PioPin` is implemented per concrete pin, so a runtime pin can't reach
+    // the driver. `pimoroni` uses fixed PWM pins; `none` renders nothing.
+    #[cfg(any(led_kind = "ws2812", led_kind = "gpio"))]
     macro_rules! led_pin {
         ($($n:literal => $pin:expr),* $(,)?) => {{
             $( #[cfg(led_pin = $n)] { $pin } )*
         }};
     }
-    let led_data = led_pin!(
-        "0" => p.PIN_0, "1" => p.PIN_1, "2" => p.PIN_2, "3" => p.PIN_3, "4" => p.PIN_4,
-        "5" => p.PIN_5, "6" => p.PIN_6, "7" => p.PIN_7, "8" => p.PIN_8, "9" => p.PIN_9,
-        "10" => p.PIN_10, "11" => p.PIN_11, "12" => p.PIN_12, "13" => p.PIN_13, "14" => p.PIN_14,
-        "15" => p.PIN_15, "16" => p.PIN_16, "17" => p.PIN_17, "18" => p.PIN_18, "19" => p.PIN_19,
-        "20" => p.PIN_20, "21" => p.PIN_21, "22" => p.PIN_22, "23" => p.PIN_23, "24" => p.PIN_24,
-        "25" => p.PIN_25, "26" => p.PIN_26, "27" => p.PIN_27, "28" => p.PIN_28, "29" => p.PIN_29,
-    );
-    let ws2812 = PioWs2812::with_color_order(&mut common, sm0, p.DMA_CH0, Irqs, led_data, &program);
-    hp.spawn(led::led_task(ws2812).unwrap());
+    #[cfg(led_kind = "ws2812")]
+    {
+        let Pio {
+            mut common, sm0, ..
+        } = Pio::new(p.PIO0, Irqs);
+        let program = PioWs2812Program::new(&mut common);
+        let led_data = led_pin!(
+            "0" => p.PIN_0, "1" => p.PIN_1, "2" => p.PIN_2, "3" => p.PIN_3, "4" => p.PIN_4,
+            "5" => p.PIN_5, "6" => p.PIN_6, "7" => p.PIN_7, "8" => p.PIN_8, "9" => p.PIN_9,
+            "10" => p.PIN_10, "11" => p.PIN_11, "12" => p.PIN_12, "13" => p.PIN_13, "14" => p.PIN_14,
+            "15" => p.PIN_15, "16" => p.PIN_16, "17" => p.PIN_17, "18" => p.PIN_18, "19" => p.PIN_19,
+            "20" => p.PIN_20, "21" => p.PIN_21, "22" => p.PIN_22, "23" => p.PIN_23, "24" => p.PIN_24,
+            "25" => p.PIN_25, "26" => p.PIN_26, "27" => p.PIN_27, "28" => p.PIN_28, "29" => p.PIN_29,
+        );
+        let ws2812 =
+            PioWs2812::with_color_order(&mut common, sm0, p.DMA_CH0, Irqs, led_data, &program);
+        hp.spawn(led::ws2812_task(ws2812).unwrap());
+    }
+    #[cfg(led_kind = "gpio")]
+    {
+        use embassy_rp::gpio::{Level, Output};
+        let led_data = led_pin!(
+            "0" => p.PIN_0, "1" => p.PIN_1, "2" => p.PIN_2, "3" => p.PIN_3, "4" => p.PIN_4,
+            "5" => p.PIN_5, "6" => p.PIN_6, "7" => p.PIN_7, "8" => p.PIN_8, "9" => p.PIN_9,
+            "10" => p.PIN_10, "11" => p.PIN_11, "12" => p.PIN_12, "13" => p.PIN_13, "14" => p.PIN_14,
+            "15" => p.PIN_15, "16" => p.PIN_16, "17" => p.PIN_17, "18" => p.PIN_18, "19" => p.PIN_19,
+            "20" => p.PIN_20, "21" => p.PIN_21, "22" => p.PIN_22, "23" => p.PIN_23, "24" => p.PIN_24,
+            "25" => p.PIN_25, "26" => p.PIN_26, "27" => p.PIN_27, "28" => p.PIN_28, "29" => p.PIN_29,
+        );
+        hp.spawn(led::gpio_task(Output::new(led_data, Level::Low)).unwrap());
+    }
+    #[cfg(led_kind = "pimoroni")]
+    {
+        use embassy_rp::pwm::Pwm;
+        // Pimoroni Tiny 2350 RGB: R=GPIO18 (slice1·A), G=GPIO19 (slice1·B),
+        // B=GPIO20 (slice2·A). The common-anode polarity is in `led::pimoroni_cfg`.
+        let rg = Pwm::new_output_ab(p.PWM_SLICE1, p.PIN_18, p.PIN_19, led::pimoroni_cfg());
+        let b = Pwm::new_output_a(p.PWM_SLICE2, p.PIN_20, led::pimoroni_cfg());
+        hp.spawn(led::pimoroni_task(rg, b).unwrap());
+    }
+    #[cfg(led_kind = "none")]
+    {
+        // No indicator: the status engine still runs (vendor SET/GET LED keep
+        // working) — there is just nothing rendering it.
+    }
 
     core1::spawn(p.CORE1);
 
