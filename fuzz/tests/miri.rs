@@ -377,8 +377,8 @@ fn miri_fido_vendor() {
         let _ = ensure_seed(&d, &mut fs, &mut rng);
         if soft_lock {
             let blob = seal_seed_locked(&mut rng, &[0x4D; 32], &[0x5A; 32]);
-            let _ = fs.put(rsk_fido::consts::EF_KEY_DEV_ENC, &blob);
-            let _ = fs.delete(rsk_fido::consts::EF_KEY_DEV);
+            let _ = fs.put(rsk_fido::consts::EF_KEY_DEV_ENC.get(), &blob);
+            let _ = fs.delete(rsk_fido::consts::EF_KEY_DEV.get());
         }
         let mut state = FidoState::new();
         state.mse_active = true;

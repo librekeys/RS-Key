@@ -45,8 +45,8 @@ fuzz_target!(|data: &[u8]| {
     // locked guards in EXPORT/LOAD are reachable too.
     if data.first().is_some_and(|b| b & 1 == 1) {
         let blob = seal_seed_locked(&mut rng, &[0x4D; 32], &[0x5A; 32]);
-        let _ = fs.put(rsk_fido::consts::EF_KEY_DEV_ENC, &blob);
-        let _ = fs.delete(EF_KEY_DEV);
+        let _ = fs.put(rsk_fido::consts::EF_KEY_DEV_ENC.get(), &blob);
+        let _ = fs.delete(EF_KEY_DEV.get());
     }
 
     let mut state = rsk_fido::FidoState::new();
