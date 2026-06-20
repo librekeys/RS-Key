@@ -114,4 +114,30 @@ mod tests {
         // An all-0xFF key has non-reduced coefficients → InvalidKey.
         assert!(mlkem768_encapsulate(&[0xFF; MLKEM768_EK_LEN], &[0u8; 32]).is_err());
     }
+
+    /// Emit a deterministic KAT (fixed `d‖z` seed + fixed `m`) so the host
+    /// toolchain's ML-KEM-768 (OpenSSL, via `cryptography`) can be cross-checked
+    /// against this RustCrypto implementation off-device: same seed must give the
+    /// same `ek`, and the host must decapsulate this `ct` back to this `ss`. Run:
+    /// `cargo test -p rsk-crypto --target <host> --ignored mlkem_interop_kat -- --nocapture`
+    #[test]
+    #[ignore = "prints an interop KAT for the host ML-KEM cross-check"]
+    fn mlkem_interop_kat() {
+        fn hex(b: &[u8]) -> std::string::String {
+            let mut s = std::string::String::new();
+            for x in b {
+                s.push_str(&std::format!("{x:02x}"));
+            }
+            s
+        }
+        let seed = [0x5Au8; MLKEM768_SEED_LEN];
+        let m = [0x3Cu8; 32];
+        let pair = MlKem768Pair::from_seed(&seed);
+        let ek = pair.encapsulation_key();
+        let (ct, ss) = mlkem768_encapsulate(&ek, &m).unwrap();
+        std::println!("SEED {}", hex(&seed));
+        std::println!("EK {}", hex(&ek));
+        std::println!("CT {}", hex(&ct));
+        std::println!("SS {}", hex(&ss));
+    }
 }

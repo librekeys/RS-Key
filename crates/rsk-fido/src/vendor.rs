@@ -29,6 +29,7 @@ use zeroize::Zeroize;
 
 use rsk_crypto::chachapoly::{chacha20poly1305_decrypt, chacha20poly1305_encrypt};
 use rsk_crypto::mac::hkdf_sha256;
+use rsk_crypto::mlkem::{MLKEM768_CT_LEN, MLKEM768_EK_LEN, mlkem768_encapsulate};
 use rsk_crypto::pinproto::{PinProto, ecdh_raw};
 use rsk_crypto::sha256;
 use rsk_fs::Storage;
@@ -61,6 +62,9 @@ struct Req<'a> {
     subcommand: u64,
     kax: &'a [u8],
     kay: &'a [u8],
+    /// MSE subCommandParams key 2 (optional): the host's ML-KEM-768 encapsulation
+    /// key (1184 B). When present, the MSE channel is hybrid P-256 + ML-KEM-768.
+    mlkem_ek: &'a [u8],
     blob: &'a [u8],
     /// ATT_IMPORT subCommandParams key 2: the DER cert chain, leaf first.
     chain: &'a [u8],
@@ -107,6 +111,8 @@ fn parse(data: &[u8]) -> Result<Req<'_>, CtapError> {
                         req.blob = cbor(d.bytes())?;
                     } else if sk == 2 && req.subcommand == VENDOR_ATT_IMPORT {
                         req.chain = cbor(d.bytes())?;
+                    } else if sk == 2 && req.subcommand == VENDOR_MSE {
+                        req.mlkem_ek = cbor(d.bytes())?;
                     } else {
                         cbor(d.skip())?;
                     }
@@ -293,9 +299,23 @@ fn unlock<S: Storage, R: Rng>(ctx: &mut Ctx<S, R>, req: &Req) -> CtapResult {
     }
 }
 
+/// Domain-separation salt for the hybrid channel key — keeps the post-quantum
+/// derivation disjoint from the classical one (which uses an empty salt). The
+/// `v1` pins the construction `HKDF-SHA256(salt, z ‖ ss_mlkem, dev_pub ‖ ct)`.
+const MSE_PQ_SALT: &[u8] = b"RSK-MSE-PQ-v1";
+
 /// `MSE` key agreement: a fresh device ephemeral keypair, ECDH with the host key,
 /// then `HKDF-SHA256(ikm = shared x, info = device pubkey)` → the 32-byte channel
 /// key. Returns the device public key as a COSE ECDH key.
+///
+/// When the host also supplies an ML-KEM-768 encapsulation key (subCommandParams
+/// key 2), the channel is **hybrid**: the device encapsulates to it and folds the
+/// ML-KEM shared secret into the derivation alongside the ECDH secret
+/// ([`mlkem_leg`]), returning the ciphertext as response key 2. This is the
+/// harvest-now-decrypt-later defense for the seed-backup channel — recording the
+/// exchange today no longer hands a future quantum adversary the channel key,
+/// since recovering it needs *both* P-256 and ML-KEM-768 broken. A host that
+/// sends no key 2 gets the classical channel, byte-for-byte unchanged.
 fn mse<S: Storage, R: Rng>(ctx: &mut Ctx<S, R>, req: &Req, out: &mut [u8]) -> CtapResult {
     if req.kax.is_empty() || req.kay.is_empty() {
         return Err(CtapError::MissingParameter);
@@ -324,12 +344,18 @@ fn mse<S: Storage, R: Rng>(ctx: &mut Ctx<S, R>, req: &Req, out: &mut [u8]) -> Ct
     dev_pub[1..33].copy_from_slice(&dx);
     dev_pub[33..].copy_from_slice(&dy);
 
+    let hybrid = !req.mlkem_ek.is_empty();
+    let mut ct = [0u8; MLKEM768_CT_LEN];
     let mut key = [0u8; 32];
-    let r = hkdf_sha256(&[], &z, &dev_pub, &mut key);
+    let derived = if hybrid {
+        mlkem_leg(ctx.rng, req.mlkem_ek, &z, &dev_pub, &mut ct, &mut key)
+    } else {
+        hkdf_sha256(&[], &z, &dev_pub, &mut key).map_err(|_| CtapError::Other)
+    };
     z.zeroize();
-    if r.is_err() {
+    if let Err(e) = derived {
         key.zeroize();
-        return Err(CtapError::Other);
+        return Err(e);
     }
     ctx.state.mse_key = key;
     ctx.state.mse_pub = dev_pub;
@@ -337,9 +363,50 @@ fn mse<S: Storage, R: Rng>(ctx: &mut Ctx<S, R>, req: &Req, out: &mut [u8]) -> Ct
     key.zeroize();
 
     encode(out, |e| {
-        e.map(1)?.u8(1)?;
-        cose_key_ecdh(e, &dx, &dy)
+        e.map(if hybrid { 2 } else { 1 })?.u8(1)?;
+        cose_key_ecdh(e, &dx, &dy)?;
+        if hybrid {
+            e.u8(2)?.bytes(&ct)?;
+        }
+        Ok(())
     })
+}
+
+/// The ML-KEM-768 leg of the hybrid handshake: encapsulate to the host's `ek`,
+/// hand back the ciphertext for the response, and derive the channel key as
+/// `HKDF-SHA256(MSE_PQ_SALT, z ‖ ss_mlkem, dev_pub ‖ ct)`. Both shared secrets go
+/// into the IKM (a break of either primitive leaves the key safe); the ML-KEM
+/// ciphertext is bound through `info` so the key commits to the exact
+/// encapsulation. A malformed `ek` — wrong length or non-reduced coefficients —
+/// is rejected before any channel is established. Only `encapsulate` runs on the
+/// device (the cheap ML-KEM direction); keygen and decapsulate stay on the host.
+fn mlkem_leg<R: Rng>(
+    rng: &mut R,
+    ek: &[u8],
+    z: &[u8; 32],
+    dev_pub: &[u8; 65],
+    ct: &mut [u8; MLKEM768_CT_LEN],
+    key: &mut [u8; 32],
+) -> Result<(), CtapError> {
+    let ek = <&[u8; MLKEM768_EK_LEN]>::try_from(ek).map_err(|_| CtapError::InvalidParameter)?;
+    let mut m = [0u8; 32];
+    rng.fill(&mut m);
+    let (c, mut ss) = mlkem768_encapsulate(ek, &m).map_err(|_| CtapError::InvalidParameter)?;
+    m.zeroize();
+    ct.copy_from_slice(&c);
+
+    let mut ikm = [0u8; 64];
+    ikm[..32].copy_from_slice(z);
+    ikm[32..].copy_from_slice(&ss);
+    ss.zeroize();
+
+    let mut info = [0u8; 65 + MLKEM768_CT_LEN];
+    info[..65].copy_from_slice(dev_pub);
+    info[65..].copy_from_slice(ct);
+
+    let r = hkdf_sha256(MSE_PQ_SALT, &ikm, &info, key);
+    ikm.zeroize();
+    r.map_err(|_| CtapError::Other)
 }
 
 /// Common gate for the seed-moving commands: an established MSE channel, physical
@@ -501,6 +568,8 @@ mod tests {
     use crate::seed::{ensure_seed, load_keydev};
     use crate::{AlwaysConfirm, FidoState, Presence, UserPresence};
     use rsk_crypto::Device;
+    use rsk_crypto::MlKem768Pair;
+    use rsk_crypto::mlkem::MLKEM768_SEED_LEN;
     use rsk_fs::Fs;
     use rsk_fs::storage::ram::RamStorage;
 
@@ -625,6 +694,104 @@ mod tests {
         aad[33..].copy_from_slice(&dy);
         let mut key = [0u8; 32];
         hkdf_sha256(&[], &z, &aad, &mut key).unwrap();
+        Host { key, aad }
+    }
+
+    /// MSE request with the optional ML-KEM-768 encapsulation key in
+    /// subCommandParams key 2 — `{1: MSE, 2: {1: COSE_Key, 2: ek}}`.
+    fn build_mse_hybrid(buf: &mut [u8], hx: &[u8; 32], hy: &[u8; 32], ek: &[u8]) -> usize {
+        let mut e = Encoder::new(Cursor::new(buf));
+        e.map(2)
+            .unwrap()
+            .u8(1)
+            .unwrap()
+            .u64(VENDOR_MSE)
+            .unwrap()
+            .u8(2)
+            .unwrap()
+            .map(2)
+            .unwrap()
+            .u8(1)
+            .unwrap()
+            .map(5)
+            .unwrap()
+            .u8(1)
+            .unwrap()
+            .u8(2)
+            .unwrap()
+            .u8(3)
+            .unwrap()
+            .i64(-25)
+            .unwrap()
+            .i8(-1)
+            .unwrap()
+            .u8(1)
+            .unwrap()
+            .i8(-2)
+            .unwrap()
+            .bytes(hx)
+            .unwrap()
+            .i8(-3)
+            .unwrap()
+            .bytes(hy)
+            .unwrap()
+            .u8(2)
+            .unwrap()
+            .bytes(ek)
+            .unwrap();
+        e.writer().position()
+    }
+
+    /// Run the hybrid MSE handshake host-side: send a P-256 pubkey plus a fresh
+    /// ML-KEM-768 encapsulation key, then recompute the channel key from the ECDH
+    /// secret and the decapsulated ML-KEM secret exactly as [`mlkem_leg`] does.
+    fn handshake_pq(fs: &mut Fs<RamStorage>, rng: &mut SeqRng, state: &mut FidoState) -> Host {
+        let host_scalar = [0x42u8; 32];
+        let (hx, hy) = P256Key::from_scalar(&host_scalar).unwrap().public_xy();
+
+        // The host is the decapsulator: it keeps the ML-KEM keypair and ships ek.
+        let pair = MlKem768Pair::from_seed(&[0x55u8; MLKEM768_SEED_LEN]);
+        let ek = pair.encapsulation_key();
+
+        let mut req = [0u8; 1400];
+        let n = build_mse_hybrid(&mut req, &hx, &hy, &ek);
+        let mut out = [0u8; 1400];
+        let r = call(fs, rng, state, &mut AlwaysConfirm, &req[..n], &mut out).unwrap();
+
+        // parse {1: COSE_Key{...,-2:dx,-3:dy}, 2: ct}
+        let mut d = Decoder::new(&out[..r]);
+        assert_eq!(d.map().unwrap(), Some(2));
+        assert_eq!(d.u8().unwrap(), 1);
+        let c = d.map().unwrap().unwrap();
+        let (mut dx, mut dy) = ([0u8; 32], [0u8; 32]);
+        for _ in 0..c {
+            match d.i32().unwrap() {
+                -2 => dx.copy_from_slice(d.bytes().unwrap()),
+                -3 => dy.copy_from_slice(d.bytes().unwrap()),
+                _ => {
+                    d.skip().unwrap();
+                }
+            }
+        }
+        assert_eq!(d.u8().unwrap(), 2);
+        let mut ct = [0u8; MLKEM768_CT_LEN];
+        ct.copy_from_slice(d.bytes().unwrap());
+
+        let z = ecdh_raw(&host_scalar, &dx, &dy).unwrap();
+        let ss = pair.decapsulate(&ct);
+        let mut aad = [0u8; 65];
+        aad[0] = 0x04;
+        aad[1..33].copy_from_slice(&dx);
+        aad[33..].copy_from_slice(&dy);
+
+        let mut ikm = [0u8; 64];
+        ikm[..32].copy_from_slice(&z);
+        ikm[32..].copy_from_slice(&ss);
+        let mut info = [0u8; 65 + MLKEM768_CT_LEN];
+        info[..65].copy_from_slice(&aad);
+        info[65..].copy_from_slice(&ct);
+        let mut key = [0u8; 32];
+        hkdf_sha256(MSE_PQ_SALT, &ikm, &info, &mut key).unwrap();
         Host { key, aad }
     }
 
@@ -824,6 +991,99 @@ mod tests {
         tag.copy_from_slice(&blob[44..]);
         chacha20poly1305_decrypt(&host.key, &nonce, &host.aad, &mut buf, &tag).unwrap();
         assert_eq!(buf, seed);
+    }
+
+    #[test]
+    fn mse_hybrid_then_export_roundtrips_seed() {
+        // End-to-end proof of the hybrid channel: if the device-side ML-KEM
+        // encapsulate + HKDF agrees with the host-side decapsulate + HKDF, the
+        // seed exported over the channel decrypts to the real seed.
+        let (mut fs, mut rng, mut st) = setup();
+        let seed = load_keydev(&dev(), &mut fs).unwrap();
+        let host = handshake_pq(&mut fs, &mut rng, &mut st);
+
+        let mut req = [0u8; 32];
+        let n = one_byte_req(&mut req, VENDOR_BACKUP_EXPORT);
+        let mut out = [0u8; 128];
+        let r = call(
+            &mut fs,
+            &mut rng,
+            &mut st,
+            &mut AlwaysConfirm,
+            &req[..n],
+            &mut out,
+        )
+        .unwrap();
+
+        let mut d = Decoder::new(&out[..r]);
+        assert_eq!(d.map().unwrap(), Some(1));
+        assert_eq!(d.u8().unwrap(), 1);
+        let blob = d.bytes().unwrap();
+        assert_eq!(blob.len(), BLOB_LEN);
+        let mut nonce = [0u8; 12];
+        nonce.copy_from_slice(&blob[..12]);
+        let mut buf = [0u8; 32];
+        buf.copy_from_slice(&blob[12..44]);
+        let mut tag = [0u8; 16];
+        tag.copy_from_slice(&blob[44..]);
+        chacha20poly1305_decrypt(&host.key, &nonce, &host.aad, &mut buf, &tag).unwrap();
+        assert_eq!(buf, seed);
+    }
+
+    #[test]
+    fn hybrid_channel_key_differs_from_classical() {
+        // Same fresh device (same RNG seed → same P-256 ephemeral and ECDH
+        // secret): the PQ leg must still derive a different channel key, proving
+        // the ML-KEM secret and the domain salt actually participate.
+        let (mut fs1, mut rng1, mut st1) = setup();
+        let classical = handshake(&mut fs1, &mut rng1, &mut st1);
+        let (mut fs2, mut rng2, mut st2) = setup();
+        let hybrid = handshake_pq(&mut fs2, &mut rng2, &mut st2);
+        assert_ne!(classical.key, hybrid.key);
+    }
+
+    #[test]
+    fn mse_rejects_short_mlkem_ek() {
+        // An encapsulation key one byte short is rejected before any channel
+        // forms — no half-open hybrid state.
+        let (mut fs, mut rng, mut st) = setup();
+        let (hx, hy) = P256Key::from_scalar(&[0x42u8; 32]).unwrap().public_xy();
+        let short_ek = [0u8; MLKEM768_EK_LEN - 1];
+        let mut req = [0u8; 1400];
+        let n = build_mse_hybrid(&mut req, &hx, &hy, &short_ek);
+        let mut out = [0u8; 1400];
+        let e = call(
+            &mut fs,
+            &mut rng,
+            &mut st,
+            &mut AlwaysConfirm,
+            &req[..n],
+            &mut out,
+        );
+        assert_eq!(e, Err(CtapError::InvalidParameter));
+        assert!(!st.mse_active);
+    }
+
+    #[test]
+    fn mse_rejects_unreduced_mlkem_ek() {
+        // Right length, non-reduced coefficients → ML-KEM encapsulate fails; the
+        // vendor layer maps that to InvalidParameter, no channel established.
+        let (mut fs, mut rng, mut st) = setup();
+        let (hx, hy) = P256Key::from_scalar(&[0x42u8; 32]).unwrap().public_xy();
+        let bad_ek = [0xFFu8; MLKEM768_EK_LEN];
+        let mut req = [0u8; 1400];
+        let n = build_mse_hybrid(&mut req, &hx, &hy, &bad_ek);
+        let mut out = [0u8; 1400];
+        let e = call(
+            &mut fs,
+            &mut rng,
+            &mut st,
+            &mut AlwaysConfirm,
+            &req[..n],
+            &mut out,
+        );
+        assert_eq!(e, Err(CtapError::InvalidParameter));
+        assert!(!st.mse_active);
     }
 
     #[test]

@@ -13,6 +13,24 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
 
 ## [Unreleased]
 
+### Added
+
+- **Hybrid post-quantum seed-backup channel — the vendor MSE key agreement is now
+  P-256 + ML-KEM-768.** The seed-backup channel (`authenticatorVendor` `0x41`,
+  `MSE`) is the one place the device hands out a normally non-exportable key — the
+  32-byte master seed — so a recorded exchange is the prime harvest-now-decrypt-
+  later target: break the ephemeral P-256 ECDH with a future quantum computer and
+  the wrapped seed falls out. The handshake now accepts an optional ML-KEM-768
+  (FIPS 203) encapsulation key in subCommandParams key 2; when present the device
+  encapsulates to it and derives the channel key as
+  `HKDF-SHA256("RSK-MSE-PQ-v1", z ‖ ss_mlkem, dev_pub ‖ ct)`, returning the
+  ciphertext as response key 2. Both shared secrets feed the KDF, so the channel
+  stays confidential unless *both* P-256 and ML-KEM-768 are broken (defense in
+  depth — never PQC-only). Only the cheap `encapsulate` direction runs on-device;
+  the host keeps the ML-KEM keypair and decapsulates. A host that sends no key 2
+  gets the classical channel byte-for-byte, so existing hosts keep working.
+  `bcdDevice` `0x0777` → `0x0778`.
+
 ### Fixed
 
 - **CTAPHID: an init-type frame received mid-transaction is rejected as

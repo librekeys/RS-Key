@@ -32,6 +32,22 @@ from cryptography.hazmat.primitives.asymmetric import ec  # noqa: E402
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF  # noqa: E402
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305  # noqa: E402
 
+# ML-KEM-768 (FIPS 203) is optional: cryptography >= 46 exposes it. When present,
+# the MSE handshake is hybrid P-256 + ML-KEM-768 — harvest-now-decrypt-later
+# resistant, since recovering the channel key (and thus the exported seed) would
+# need *both* P-256 and ML-KEM-768 broken. Older hosts, or older devices that do
+# not understand the extra field, transparently fall back to classical P-256.
+try:
+    from cryptography.hazmat.primitives.asymmetric.mlkem import (  # noqa: E402
+        MLKEM768PrivateKey,
+    )
+
+    _MLKEM_OK = True
+except ImportError:
+    _MLKEM_OK = False
+
+MSE_PQ_SALT = b"RSK-MSE-PQ-v1"  # domain-separates the hybrid key; must match firmware
+
 
 def register(sub):
     p = sub.add_parser("backup", help="wallet-style FIDO seed backup / restore")
@@ -62,10 +78,25 @@ def _vendor(dev, cid, fields):
 
 
 def mse_handshake(dev, cid):
+    """ECDH key agreement → a 32-byte ChaCha20-Poly1305 channel key + its AAD.
+
+    Sends the host's P-256 ephemeral key and, when ML-KEM-768 is available, an
+    encapsulation key (subCommandParams key 2). A device that supports it replies
+    with a ciphertext (response key 2) and the channel becomes hybrid:
+    ``HKDF(salt=MSE_PQ_SALT, ikm=z ‖ ss_mlkem, info=aad ‖ ct)``. Otherwise — old
+    host or old firmware — the classical ``HKDF(salt="", ikm=z, info=aad)`` is
+    used. The AAD (the device's P-256 public point) is identical either way, so
+    every downstream subcommand is unaffected by which channel was negotiated.
+    """
     priv = ec.generate_private_key(ec.SECP256R1())
     nums = priv.public_key().public_numbers()
     cose = {1: 2, 3: -25, -1: 1, -2: nums.x.to_bytes(32, "big"), -3: nums.y.to_bytes(32, "big")}
-    st, m = _vendor(dev, cid, {1: VENDOR_MSE, 2: {1: cose}})
+    subpara = {1: cose}
+    kem = MLKEM768PrivateKey.generate() if _MLKEM_OK else None
+    if kem is not None:
+        subpara[2] = kem.public_key().public_bytes_raw()  # 1184-byte ek
+
+    st, m = _vendor(dev, cid, {1: VENDOR_MSE, 2: subpara})
     if st != 0:
         die(f"MSE failed: status {st:#x}")
     dx, dy = m[1][-2], m[1][-3]
@@ -73,7 +104,16 @@ def mse_handshake(dev, cid):
         int.from_bytes(dx, "big"), int.from_bytes(dy, "big"), ec.SECP256R1()).public_key()
     z = priv.exchange(ec.ECDH(), peer)
     aad = b"\x04" + dx + dy
-    key = HKDF(algorithm=hashes.SHA256(), length=32, salt=b"", info=aad).derive(z)
+
+    ct = m.get(2)  # present iff the device went hybrid
+    if kem is not None and ct is not None:
+        ss = kem.decapsulate(ct)
+        key = HKDF(algorithm=hashes.SHA256(), length=32, salt=MSE_PQ_SALT,
+                   info=aad + ct).derive(z + ss)
+        print("MSE channel: hybrid P-256 + ML-KEM-768", file=sys.stderr)
+    else:
+        key = HKDF(algorithm=hashes.SHA256(), length=32, salt=b"", info=aad).derive(z)
+        print("MSE channel: classical P-256", file=sys.stderr)
     return key, aad
 
 
