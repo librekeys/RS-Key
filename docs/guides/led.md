@@ -10,6 +10,10 @@ Tiny 2350), or `none`. The `ws2812`/`gpio` data pin is `LED_PIN` (any GPIO
 LED can't show the status *colours* below, but the blink *pattern* still tells
 the four states apart; `none` boards just run dark.
 
+A `ws2812` board whose **red and green come out swapped** (blue unaffected) has
+the other wire byte order: the Waveshare RP2350-One is `rgb` (the default), most
+other WS2812B parts are `grb` — set `LED_ORDER=grb` to match.
+
 The LED runs on its own high-priority task, so it keeps animating even while
 the firmware blocks waiting for a touch or grinds through a long RSA keygen —
 a frozen LED means the firmware itself is wedged, not just busy.

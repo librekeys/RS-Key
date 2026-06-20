@@ -27,6 +27,15 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
   or `none` (headless). Only the selected driver and its PIO/PWM dependencies are
   compiled. `bcdDevice` `0x0778` → `0x0779`.
 
+- **`LED_ORDER` build knob — the WS2812 wire byte order is now selectable.** The
+  reference Waveshare RP2350-One is unusually **RGB**, the project default; but
+  standard WS2812B parts (e.g. the TenStar RP2350-USB) are **GRB**, and driving
+  one with the wrong order swaps red↔green (blue is unaffected). `LED_ORDER=grb`
+  picks the standard order for such boards; `rgb` (default) keeps the Waveshare
+  behaviour. Verified on a TenStar RP2350-USB (16 MB, WS2812 on GP22):
+  `LED_KIND=ws2812 LED_ORDER=grb LED_PIN=22 FLASH_SIZE=16M`. `bcdDevice` `0x0779`
+  → `0x077A`.
+
 - **Hybrid post-quantum seed-backup channel — the vendor MSE key agreement is now
   P-256 + ML-KEM-768.** The seed-backup channel (`authenticatorVendor` `0x41`,
   `MSE`) is the one place the device hands out a normally non-exportable key — the

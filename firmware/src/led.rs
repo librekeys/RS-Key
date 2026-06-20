@@ -20,13 +20,18 @@ use embassy_time::{Duration, Instant, Timer};
 #[cfg(not(led_kind = "none"))]
 use smart_leds::RGB8;
 
-// The Waveshare RP2350-One's WS2812 takes the RGB wire byte order, not the
-// WS2812B-standard GRB embassy defaults to — the default swaps red and green on
-// this board (blue is unaffected). Drive it in `Rgb` order to match.
 #[cfg(led_kind = "ws2812")]
 use embassy_rp::peripherals::PIO0;
 #[cfg(led_kind = "ws2812")]
-use embassy_rp::pio_programs::ws2812::{PioWs2812, Rgb};
+use embassy_rp::pio_programs::ws2812::PioWs2812;
+// WS2812 wire byte order, picked by `LED_ORDER`. The Waveshare RP2350-One is
+// unusually **RGB** (the default); standard WS2812B parts — e.g. the TenStar
+// RP2350-USB — are **GRB**. The wrong order swaps the red and green channels
+// (blue is unaffected), which is exactly how a board with the other order looks.
+#[cfg(all(led_kind = "ws2812", led_order = "grb"))]
+use embassy_rp::pio_programs::ws2812::Grb as Ws2812Order;
+#[cfg(all(led_kind = "ws2812", not(led_order = "grb")))]
+use embassy_rp::pio_programs::ws2812::Rgb as Ws2812Order;
 
 #[cfg(led_kind = "gpio")]
 use embassy_rp::gpio::{Level, Output};
@@ -207,7 +212,7 @@ impl Blinker {
 /// `ws2812` backend: drive the single addressable LED with the blink colour.
 #[cfg(led_kind = "ws2812")]
 #[embassy_executor::task]
-pub async fn ws2812_task(mut ws2812: PioWs2812<'static, PIO0, 0, NUM_LEDS, Rgb>) {
+pub async fn ws2812_task(mut ws2812: PioWs2812<'static, PIO0, 0, NUM_LEDS, Ws2812Order>) {
     let mut blinker = Blinker::new();
     loop {
         ws2812.write(&[blinker.tick(); NUM_LEDS]).await;

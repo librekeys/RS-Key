@@ -81,6 +81,14 @@ fn main() {
     );
     println!("cargo:rerun-if-env-changed=LED_KIND");
 
+    // WS2812 wire byte order (the `ws2812` backend only): `rgb` (default — the
+    // Waveshare RP2350-One is unusually RGB) or `grb` (the WS2812B standard, e.g.
+    // the TenStar RP2350-USB). The wrong order swaps red↔green (blue is fine).
+    let led_order = resolve_led_order();
+    println!("cargo:rustc-cfg=led_order=\"{led_order}\"");
+    println!("cargo:rustc-check-cfg=cfg(led_order, values(\"rgb\", \"grb\"))");
+    println!("cargo:rerun-if-env-changed=LED_ORDER");
+
     // Bake fake OTP keys into the image instead of reading the fuses — exercises
     // the kbase migration + boot path without an irreversible OTP write.
     // TEST BUILDS ONLY; never set for a shipped image.
@@ -188,6 +196,19 @@ fn resolve_led_kind() -> String {
         "" | "ws2812" => "ws2812".into(), // unset / empty → the default backend
         "gpio" | "pimoroni" | "none" => v,
         _ => panic!("LED_KIND={raw:?} must be one of: ws2812, gpio, pimoroni, none"),
+    }
+}
+
+/// Resolve `LED_ORDER` (the WS2812 wire byte order) to `rgb` or `grb`; defaults
+/// to `rgb` (the Waveshare RP2350-One). `grb` is the WS2812B standard — pick it
+/// on boards whose red/green come out swapped (e.g. the TenStar RP2350-USB).
+fn resolve_led_order() -> String {
+    let raw = env::var("LED_ORDER").unwrap_or_default();
+    let v = raw.trim().to_ascii_lowercase();
+    match v.as_str() {
+        "" | "rgb" => "rgb".into(), // unset / empty → the Waveshare default
+        "grb" => v,
+        _ => panic!("LED_ORDER={raw:?} must be rgb or grb"),
     }
 }
 

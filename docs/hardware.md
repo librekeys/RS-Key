@@ -30,10 +30,14 @@ cover it:
 | `FLASH_SIZE` | `4M` | A board with a different QSPI flash chip (e.g. `8M`). `build.rs` regenerates `memory.x` from it. Must be ≥ ~2 MB and ≤ 16 MB. |
 | `LED_PIN` | `16` | A board that uses GPIO16 for something else, or wires its addressable LED elsewhere (RP2350A: GPIO `0..=29`). |
 | `LED_KIND` | `ws2812` | A board with a different indicator: `gpio` (a plain on/off LED on `LED_PIN`), `pimoroni` (3-pin PWM RGB, Pimoroni Tiny 2350), or `none`. Default `ws2812` is the Waveshare addressable RGB. |
+| `LED_ORDER` | `rgb` | A `ws2812` board whose red and green come out swapped (blue fine): set `grb` (the WS2812B standard). The Waveshare RP2350-One is `rgb`; most other parts are `grb`. |
 
 ```sh
 # example: an 8 MB board with a plain LED on GPIO25
 env FLASH_SIZE=8M LED_KIND=gpio LED_PIN=25 cargo build --release -p firmware
+
+# example: a 16 MB TenStar RP2350-USB — WS2812 on GP22, standard GRB order
+env FLASH_SIZE=16M LED_PIN=22 LED_ORDER=grb cargo build --release -p firmware
 ```
 
 So most RP2350A boards work with at most a one-line change. Everything else
