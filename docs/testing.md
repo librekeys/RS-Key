@@ -211,6 +211,40 @@ test corpus and the Gnuk/OpenPGP card suite (see
 vendored, or run them from their upstream checkouts). Running an upstream
 corpus shows conformance on the cases it covers; it is not a security audit.
 
+## FIDO conformance
+
+RS-Key is run against the **FIDO Alliance Conformance Tools** (v1.8.5.1) — the
+same protocol test suites the FIDO certification programs are built on — and
+passes them clean:
+
+| Suite | Result |
+|---|---|
+| CTAP2.3 (`profile_featureful` — the strictest profile) | **235 / 0** |
+| U2F 1.1 / 1.2 | **55 / 0** |
+
+A green run exercises the full CTAP2/U2F wire surface: makeCredential /
+getAssertion validation and `up`/`uv` privacy, clientPIN protocols 1 and 2
+(including the force-PIN-change and PIN-policy edge cases), credential
+management, large blobs, `authenticatorConfig` (`alwaysUv`, `setMinPINLength`,
+enterprise attestation), CTAPHID framing + `CANCEL`, and U2F register /
+authenticate with batch attestation.
+
+Two honest caveats:
+
+- **This is a self-run pass, not a "FIDO Certified" mark.** Those are the
+  publicly available conformance tools — the same ones a lab uses — so a clean
+  result is strong evidence the protocol behaviour is spec-correct, but RS-Key
+  is not listed in the FIDO Metadata Service and claims no certification. That
+  is a deliberate non-goal (membership + a lab + fees, not a code change) —
+  see [AAGUID & metadata](guides/aaguid-metadata.md).
+- **The full enterprise-attestation suite needs a conformance-only build.** It
+  asserts against the suite's own test RP ID, which a build flag
+  (`ea-conformance-rpid`) whitelists; the shipping build does **not** bake it in
+  ([build options](build.md)). Everything else runs on the normal firmware.
+
+As with any corpus, this shows conformance on the cases the tools cover — it is
+not a security audit.
+
 ## Real-world interop
 
 Protocol conformance is necessary but not sufficient: a response can be

@@ -3,8 +3,10 @@
 The FIDO half of the device: passkeys, two-factor security-key logins, and
 legacy U2F. It speaks CTAP2 (`FIDO_2_0`) and CTAP1 (`U2F_V2`) over the HID
 interface, so standard WebAuthn browsers and OS dialogs drive it without any
-extra software. What has actually been checked against real clients is in the
-[interop matrix](../interop.md).
+extra software. It passes the FIDO Alliance Conformance Tools clean (CTAP2.3
+235/0, U2F 55/0 — a self-run pass, not a paid certification; see
+[testing](../testing.md#fido-conformance)), and what has been checked against
+real client software is in the [interop matrix](../interop.md).
 
 The default build enumerates as "RS-Key" — its own USB identity
 (`0x1209:0x0001`, the pid.codes FOSS VID), not a YubiKey one
