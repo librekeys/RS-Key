@@ -302,5 +302,12 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "kv_durability"
+path = "fuzz_targets/kv_durability.rs"
+test = false
+doc = false
+bench = false
+
 # Standalone workspace so the parent (thumbv8m) build never pulls these in.
 [workspace]
