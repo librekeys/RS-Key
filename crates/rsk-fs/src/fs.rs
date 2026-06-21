@@ -50,15 +50,27 @@ pub struct Fs<S: Storage> {
     storage: S,
     table: &'static [FileDesc],
     dynamic: Vec<u16, MAX_DYNAMIC_FILES>,
-    /// Fast-negative cache: bit `fid` is set iff the backend currently stores a
-    /// value for `fid`. Lets `read`/`size` answer "absent" without touching the
-    /// backend — a backend `read` of an absent key scans the whole flash
-    /// partition, so probing a sparse object range (e.g. the ~25 mostly-empty
-    /// PIV certificate slots Yubico Authenticator reads) was O(slots · flash).
-    /// Mirrors the backend exactly: set on every write, cleared on every
-    /// remove, rebuilt from `for_each_key` in [`Fs::scan`]. A fixed bitmap (not
-    /// the bounded `dynamic` Vec) so it can never overflow into a false absent.
+    /// Negative cache (paired with [`decided`](Self#structfield.decided)): bit
+    /// `fid` set iff the backend is KNOWN to hold a value for `fid`. Lets
+    /// `read`/`size` answer "absent" without touching the backend — a backend
+    /// `read` of an absent key scans the whole flash partition, so probing a
+    /// sparse object range (e.g. the ~25 mostly-empty PIV certificate slots
+    /// Yubico Authenticator reads) was O(slots · flash). Set on every write,
+    /// cleared on every remove; `scan` seeds it from `for_each_key`.
+    ///
+    /// A bare clear bit is NOT trusted as "absent": the bulk `for_each_key` can
+    /// silently under-count a key after a torn power-cut migration (the reliable
+    /// per-key `fetch_item` still recovers it), which would turn a clear bit into
+    /// a false-absent — committed data read back as gone. `decided` gates that.
     present: [u8; FID_PRESENT_BYTES],
+    /// Authority bit for [`present`](Self#structfield.present): set iff `fid`'s
+    /// present/absent state is confirmed. `scan` marks only the keys the bulk
+    /// pass actually enumerated; every other FID stays *unknown* until a backend
+    /// probe decides it — never a possibly-wrong fast "absent". `fetch_item` is
+    /// the source of truth and the cache only memoises it, so a false-absent is
+    /// impossible. Cost: the first probe of each absent FID per boot pays one
+    /// backend scan, then it is O(1). See [`known_absent`](Self::known_absent).
+    decided: [u8; FID_PRESENT_BYTES],
     /// Set after user authentication; gates PIN-protected ACL entries.
     pub user_authenticated: bool,
 }
@@ -70,6 +82,7 @@ impl<S: Storage> Fs<S> {
             table,
             dynamic: Vec::new(),
             present: [0u8; FID_PRESENT_BYTES],
+            decided: [0u8; FID_PRESENT_BYTES],
             user_authenticated: false,
         }
     }
@@ -80,22 +93,53 @@ impl<S: Storage> Fs<S> {
         self.storage
     }
 
-    /// Does the present-cache say `fid` has a stored value? Only authoritative
-    /// after [`Fs::scan`] (or when every write went through this `Fs` from an
-    /// empty backend), which is the contract — same as the `dynamic` set.
+    /// Raw present bit (does NOT consult `decided`). Authoritative only for a
+    /// FID known present; for the trustworthy absent test use
+    /// [`known_absent`](Self::known_absent).
     #[inline]
     fn present_bit(&self, fid: u16) -> bool {
         self.present[(fid >> 3) as usize] & (1u8 << (fid & 7)) != 0
     }
 
+    /// Is `fid`'s present/absent state confirmed (vs. unknown-until-probed)?
     #[inline]
-    fn mark_present(&mut self, fid: u16) {
-        self.present[(fid >> 3) as usize] |= 1u8 << (fid & 7);
+    fn decided_bit(&self, fid: u16) -> bool {
+        self.decided[(fid >> 3) as usize] & (1u8 << (fid & 7)) != 0
     }
 
+    /// Trustworthy fast-negative test: true only when `fid` is *confirmed*
+    /// absent. An unknown FID returns false so the caller falls through to the
+    /// reliable backend (and then caches the result) — this is what prevents a
+    /// post-power-cut false-absent. Confirmed-absent stays O(1).
+    #[inline]
+    fn known_absent(&self, fid: u16) -> bool {
+        self.decided_bit(fid) && !self.present_bit(fid)
+    }
+
+    /// Cache the backend's authoritative answer for `fid`.
+    #[inline]
+    fn record(&mut self, fid: u16, present: bool) {
+        if present {
+            self.mark_present(fid);
+        } else {
+            self.mark_absent(fid);
+        }
+    }
+
+    /// Mark `fid` known present (sets the authority bit too).
+    #[inline]
+    fn mark_present(&mut self, fid: u16) {
+        let (i, m) = ((fid >> 3) as usize, 1u8 << (fid & 7));
+        self.present[i] |= m;
+        self.decided[i] |= m;
+    }
+
+    /// Mark `fid` known absent (sets the authority bit, clears present).
     #[inline]
     fn mark_absent(&mut self, fid: u16) {
-        self.present[(fid >> 3) as usize] &= !(1u8 << (fid & 7));
+        let (i, m) = ((fid >> 3) as usize, 1u8 << (fid & 7));
+        self.present[i] &= !m;
+        self.decided[i] |= m;
     }
 
     /// Rebuild the dynamic-file set from what's already in storage (run once
@@ -106,11 +150,18 @@ impl<S: Storage> Fs<S> {
         // while `self.storage` drives the pass.
         let dynamic = &mut self.dynamic;
         let present = &mut self.present;
+        let decided = &mut self.decided;
         dynamic.clear();
         present.fill(0);
+        decided.fill(0);
         self.storage.for_each_key(&mut |fid| {
-            // Every stored key — static, dynamic, or EF_META — feeds the cache.
-            present[(fid >> 3) as usize] |= 1u8 << (fid & 7);
+            // Every enumerated key — static, dynamic, or EF_META — is confirmed
+            // present. Keys the bulk pass does NOT yield stay *undecided* (not
+            // fast-absent), so a torn-migration under-count can't turn one into a
+            // false-absent; it is confirmed against the backend on first access.
+            let (i, m) = ((fid >> 3) as usize, 1u8 << (fid & 7));
+            present[i] |= m;
+            decided[i] |= m;
             if fid == EF_META {
                 return;
             }
@@ -144,26 +195,34 @@ impl<S: Storage> Fs<S> {
 
     /// Copy file contents into `buf`; returns the value's full length, or `None`.
     pub fn read(&mut self, fid: u16, buf: &mut [u8]) -> Option<usize> {
-        if !self.present_bit(fid) {
-            return None; // absent — skip the backend's full-partition scan
+        if self.known_absent(fid) {
+            return None; // confirmed absent — skip the backend's full scan
         }
-        self.storage.read(fid, buf)
+        // Present or unknown: the backend (reliable per-key `fetch_item`) is the
+        // source of truth; cache what it says so the next probe is O(1).
+        let r = self.storage.read(fid, buf);
+        self.record(fid, r.is_some());
+        r
     }
 
     /// Length of the file's contents, or `None` if absent.
     pub fn size(&mut self, fid: u16) -> Option<usize> {
-        if !self.present_bit(fid) {
+        if self.known_absent(fid) {
             return None;
         }
-        self.storage.size(fid)
+        let r = self.storage.size(fid);
+        self.record(fid, r.is_some());
+        r
     }
 
     /// Whether the file exists with non-empty contents.
     pub fn has_data(&mut self, fid: u16) -> bool {
-        if !self.present_bit(fid) {
-            return false; // absent — skip the backend's full-partition scan
+        if self.known_absent(fid) {
+            return false; // confirmed absent — skip the backend's full scan
         }
-        self.storage.size(fid).is_some_and(|n| n > 0)
+        let r = self.storage.size(fid);
+        self.record(fid, r.is_some());
+        r.is_some_and(|n| n > 0)
     }
 
     /// Invoke `f` once per live key in the backend, in a single storage pass.
@@ -194,18 +253,33 @@ impl<S: Storage> Fs<S> {
 
     /// Delete a file: drop its contents, metadata, and any dynamic entry.
     ///
-    /// An absent FID skips the backend `remove` (a full-partition scan, and a
-    /// tombstone write) and the meta read — the present-cache answers in O(1),
-    /// matching [`read`](Self::read) / [`has_data`](Self::has_data). Without
-    /// this guard a blind delete sweep over many absent slots is
-    /// O(slots·partition): the FIDO `authenticatorReset` audit-ring scrub
-    /// (128 slots) measured ~12 s on hardware, overrunning host reset timeouts
-    /// (the FIDO conformance tool gives a reset 10 s) and wedging the suite. The
-    /// dynamic-set cleanup still runs unconditionally so a `new_file` that was
-    /// never `put` is dropped.
+    /// The backend `remove` (a full-partition scan plus a tombstone write) is
+    /// skipped for an absent FID — the present-cache answers in O(1), matching
+    /// [`read`](Self::read) / [`has_data`](Self::has_data). Without that guard a
+    /// blind delete sweep over many absent slots is O(slots·partition): the FIDO
+    /// `authenticatorReset` audit-ring scrub (128 slots) measured ~12 s on
+    /// hardware, overrunning host reset timeouts (the FIDO conformance tool gives
+    /// a reset 10 s) and wedging the suite.
+    ///
+    /// The metadata drop and the dynamic-set cleanup, by contrast, run
+    /// unconditionally: a file can carry metadata (a [`meta_add`](Self::meta_add)
+    /// with no `put`) or a dynamic entry (a [`new_file`](Self::new_file) never
+    /// written) without its contents ever being present, so gating either on the
+    /// file's present bit would orphan it — a deleted file's metadata would read
+    /// back alive. Both stay O(1) when there is nothing to drop: `meta_delete`
+    /// has its own EF_META present-cache guard and skips the rewrite when `fid`
+    /// had no record.
+    ///
+    /// Unlike the read paths, the backend `remove` keys off the *raw* present bit
+    /// rather than `known_absent`: an UNKNOWN FID is skipped, not confirmed. This
+    /// deliberately keeps the cold-boot reset sweep O(1) (confirming 128 unknown
+    /// audit slots would re-introduce the multi-second scan). The cost is only
+    /// that a delete of a (rare) torn-migration false-absent FID no-ops its own
+    /// removal — the file lingers rather than data being lost, and the next read
+    /// of it confirms-and-caches it present, after which delete works normally.
     pub fn delete(&mut self, fid: u16) -> Result<()> {
+        let _ = self.meta_delete(fid);
         if self.present_bit(fid) {
-            let _ = self.meta_delete(fid);
             self.storage.remove(fid)?;
             self.mark_absent(fid);
         }
@@ -263,11 +337,13 @@ impl<S: Storage> Fs<S> {
 
     /// Copy the metadata for `fid` into `out`; returns its full length.
     pub fn meta_find(&mut self, fid: u16, out: &mut [u8]) -> Option<usize> {
-        if !self.present_bit(EF_META) {
+        if self.known_absent(EF_META) {
             return None;
         }
         let mut scratch = [0u8; META_MAX];
-        let n = self.storage.read(EF_META, &mut scratch)?.min(scratch.len());
+        let read = self.storage.read(EF_META, &mut scratch);
+        self.record(EF_META, read.is_some());
+        let n = read?.min(scratch.len());
         let blob = &scratch[..n];
         let mut i = 0;
         while i + 4 <= blob.len() {
@@ -291,13 +367,17 @@ impl<S: Storage> Fs<S> {
     /// Insert or replace the metadata for `fid`.
     pub fn meta_add(&mut self, fid: u16, data: &[u8]) -> Result<()> {
         let mut scratch = [0u8; META_MAX];
-        let n = if self.present_bit(EF_META) {
+        // Read the existing blob unless EF_META is *confirmed* absent. Treating
+        // an UNKNOWN EF_META as empty is the power-cut bug: a torn-migration
+        // false-absent would drop every existing record on this rewrite. The
+        // reliable backend read recovers the real blob.
+        let n = if self.known_absent(EF_META) {
+            0
+        } else {
             self.storage
                 .read(EF_META, &mut scratch)
                 .unwrap_or(0)
                 .min(scratch.len())
-        } else {
-            0
         };
         let mut out = [0u8; META_MAX];
         let w = rebuild_meta(&scratch[..n], fid, Some(data), &mut out)?;
@@ -308,17 +388,26 @@ impl<S: Storage> Fs<S> {
 
     /// Remove the metadata for `fid` (clears EF_META once empty).
     pub fn meta_delete(&mut self, fid: u16) -> Result<()> {
-        if !self.present_bit(EF_META) {
-            return Ok(()); // no meta blob → nothing to drop, no backend scan
+        if self.known_absent(EF_META) {
+            return Ok(()); // confirmed no meta blob → nothing to drop
         }
         let mut scratch = [0u8; META_MAX];
         let n = match self.storage.read(EF_META, &mut scratch) {
             Some(n) => n.min(scratch.len()),
-            None => return Ok(()),
+            None => {
+                self.mark_absent(EF_META);
+                return Ok(());
+            }
         };
+        self.mark_present(EF_META);
         let mut out = [0u8; META_MAX];
         let w = rebuild_meta(&scratch[..n], fid, None, &mut out)?;
-        if w == 0 {
+        if w == n {
+            // `fid` had no record (removing one always shrinks the blob), so the
+            // rebuild is byte-identical — skip the redundant EF_META rewrite.
+            // Keeps a delete sweep over meta-less absent slots write-free.
+            Ok(())
+        } else if w == 0 {
             self.storage.remove(EF_META)?;
             self.mark_absent(EF_META);
             Ok(())
@@ -441,6 +530,7 @@ mod tests {
         read_calls: u32,
         size_calls: u32,
         remove_calls: u32,
+        write_calls: u32,
     }
     impl CountingStorage {
         fn new() -> Self {
@@ -449,6 +539,7 @@ mod tests {
                 read_calls: 0,
                 size_calls: 0,
                 remove_calls: 0,
+                write_calls: 0,
             }
         }
     }
@@ -458,6 +549,7 @@ mod tests {
             self.inner.read(fid, buf)
         }
         fn write(&mut self, fid: u16, data: &[u8]) -> Result<()> {
+            self.write_calls += 1;
             self.inner.write(fid, data)
         }
         fn remove(&mut self, fid: u16) -> Result<()> {
@@ -554,24 +646,59 @@ mod tests {
     }
 
     #[test]
-    fn absent_probes_never_touch_the_backend() {
-        // On device a backend read/size of an absent FID scans the whole flash
-        // partition (~160 ms via sequential-storage `fetch_item`). The present
-        // cache MUST answer every absent probe — `read`, `size`, AND `has_data`
-        // — without the backend. PIV GET METADATA probes ~24 empty key slots, so
-        // a missing guard on `has_data` alone cost ~4 s per `ykman piv info` (the
-        // Yubico Authenticator PIV-tab lag).
+    fn absent_probe_confirms_once_then_caches() {
+        // Tri-state cache: the FIRST probe of an UNKNOWN FID confirms via the
+        // backend (one ~160 ms flash scan on device), then memoises the result so
+        // every later probe — `read`, `size`, `has_data` — is O(1) and never
+        // touches the backend again. Confirming (rather than trusting a bulk-scan
+        // clear bit) is what prevents a post-power-cut false-absent; the PIV-tab
+        // lag returns only as a one-time-per-boot first probe, then stays fast.
         let mut fs = Fs::new(CountingStorage::new(), TABLE);
         let mut buf = [0u8; 8];
+        assert_eq!(fs.read(0xD205, &mut buf), None); // unknown → one confirming read
+        // Now decided-absent — answered from the cache, no backend.
         assert_eq!(fs.read(0xD205, &mut buf), None);
         assert_eq!(fs.size(0xD205), None);
         assert!(!fs.has_data(0xD205));
         let st = fs.into_storage();
-        assert_eq!(st.read_calls, 0, "absent read must not probe the backend");
+        assert_eq!(st.read_calls, 1, "exactly one confirming read, then cached");
         assert_eq!(
             st.size_calls, 0,
-            "absent size/has_data must not probe the backend"
+            "size/has_data answered from the cache after the first read decided it"
         );
+    }
+
+    #[test]
+    fn confirm_on_miss_recovers_unscanned_key() {
+        // A torn-migration false-absent: the backend holds a key the present-cache
+        // never learned (the bulk `scan` under-counted it). `read` MUST confirm
+        // against the reliable backend, not fast-return None — otherwise committed
+        // data reads back lost. Modelled by writing straight to the backend and
+        // building an Fs that never scanned it.
+        let mut backend = RamStorage::new();
+        backend.write(0xCF09, b"resident-cred").unwrap();
+        let mut fs = Fs::new(backend, TABLE);
+        let mut buf = [0u8; 32];
+        assert_eq!(fs.read(0xCF09, &mut buf), Some(13)); // recovered, not false-absent
+        assert_eq!(&buf[..13], b"resident-cred");
+        // A genuinely absent sibling is confirmed absent and then cached.
+        assert_eq!(fs.read(0xCF0A, &mut buf), None);
+    }
+
+    #[test]
+    fn meta_add_keeps_records_when_ef_meta_unknown() {
+        // Bug B at unit scope: EF_META present in the backend but UNKNOWN to the
+        // cache (the torn-migration false-absent). A `meta_add` must read the real
+        // blob and KEEP existing records — the bug was treating an unknown EF_META
+        // as empty and wiping every record on the rewrite.
+        let mut fs = fs();
+        fs.meta_add(0xB000, b"keep-me").unwrap();
+        let backend = fs.into_storage(); // backend now holds EF_META = {B000}
+        // Rebuild without scan() → EF_META is unknown (decided clear).
+        let mut fs2 = Fs::new(backend, TABLE);
+        fs2.meta_add(0xB004, b"new").unwrap();
+        assert_eq!(fs2.meta_find(0xB000, &mut [0u8; 16]), Some(7)); // survived
+        assert_eq!(fs2.meta_find(0xB004, &mut [0u8; 16]), Some(3));
     }
 
     #[test]
@@ -693,6 +820,42 @@ mod tests {
         fs.meta_add(0xCF06, b"m").unwrap();
         fs.delete(0xCF06).unwrap();
         assert_eq!(fs.meta_find(0xCF06, &mut [0u8; 8]), None);
+    }
+
+    #[test]
+    fn delete_drops_meta_even_without_file_data() {
+        // Regression (power_cut / fs_ops fuzz): metadata can be attached to a FID
+        // that was never `put`. `delete` must still drop that metadata; gating the
+        // meta cleanup on the file's own present bit orphaned the record, so a
+        // deleted file's metadata read back alive (after a reboot the stale
+        // EF_META record reappeared, diverging from the model).
+        let mut fs = fs();
+        let fid = 0xB001; // metadata only — the file contents are never present
+        fs.meta_add(fid, b"orphan").unwrap();
+        assert_eq!(fs.meta_find(fid, &mut [0u8; 8]), Some(6));
+        assert!(!fs.has_data(fid));
+        fs.delete(fid).unwrap();
+        assert_eq!(fs.meta_find(fid, &mut [0u8; 8]), None);
+        // That was the only record, so EF_META is gone entirely now.
+        assert_eq!(fs.size(crate::EF_META), None);
+    }
+
+    #[test]
+    fn meta_delete_of_absent_record_does_not_rewrite() {
+        // Deleting a meta-less FID while EF_META holds other records must not
+        // rewrite EF_META: a FIDO-reset sweep deletes many absent slots, and a
+        // redundant rewrite each time is flash churn plus a needless torn-write
+        // window. The sibling record must survive untouched.
+        let mut fs = Fs::new(CountingStorage::new(), TABLE);
+        fs.meta_add(0xCF00, b"keep").unwrap(); // exactly one EF_META write
+        fs.delete(0xB001).unwrap(); // neither data nor a meta record
+        assert_eq!(fs.meta_find(0xCF00, &mut [0u8; 8]), Some(4)); // sibling intact
+        let st = fs.into_storage();
+        assert_eq!(
+            st.write_calls, 1,
+            "deleting a meta-less FID must not rewrite EF_META (only the setup write)"
+        );
+        assert_eq!(st.remove_calls, 0, "absent delete must not hit the backend");
     }
 
     #[test]

@@ -13,6 +13,33 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
 
 ## [Unreleased]
 
+### Fixed
+
+- **Two power-cut data-durability bugs in the flash file system, both surfaced by
+  the `power_cut` / `fs_ops` fuzz targets (deep-checks) and latent since the
+  present-cache landed in v0.2.3.** Neither affects the shipped, verified v0.2.5
+  artifacts — both are power-cut-edge, not artifact-integrity.
+  - **`delete` orphaned metadata.** `Fs::delete` dropped a file's `EF_META`
+    record only when the file's *own* data was present, so a file given metadata
+    (`meta_add`) but never written (`put`) kept its metadata after deletion — the
+    record read back alive across a reboot, diverging the live key set from the
+    model. `delete` now drops metadata unconditionally (O(1) when there is none),
+    and `meta_delete` skips the `EF_META` rewrite when the FID had no record, so
+    the absent-slot reset sweep stays write-free.
+  - **The present-cache could go false-absent after a torn migration.** The boot
+    `scan` seeds its negative cache from a bulk `for_each_key`, which can silently
+    under-count a key when a power-cut interrupts a `sequential-storage` page
+    migration — while the per-key `fetch_item` still recovers it. A clear cache
+    bit was trusted as "absent", so committed data/metadata read back lost, and a
+    `meta_add` over a false-absent `EF_META` wiped every existing record. The
+    cache is now tri-state (`present` + a `decided` authority bit): a clear bit is
+    trusted only once a backend probe confirms it, otherwise the reliable
+    `fetch_item` decides and the answer is memoised — a false-absent is now
+    impossible. Cost: a one-time-per-boot first probe per absent FID (the PIV-tab
+    lag returns once after a plug-in, then stays O(1)). `fetch_item` durability is
+    pinned by a new `kv_durability` fuzz target (the storage layer in isolation);
+    `power_cut` and `fs_ops` now run clean. `bcdDevice` `0x077B` → `0x077C`.
+
 ## [0.2.5] — 2026-06-20
 
 ### Added
