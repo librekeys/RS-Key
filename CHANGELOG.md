@@ -13,6 +13,8 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
 
 ## [Unreleased]
 
+## [0.2.7] — 2026-06-21
+
 ### Security
 
 - **A pre-OTP seed remnant survived OTP provisioning, readable from a flash
