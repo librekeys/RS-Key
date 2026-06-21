@@ -24,6 +24,21 @@ pub trait Storage {
     /// Invoke `f` once per stored key (used to rebuild the dynamic-file set and to
     /// probe credential slots without a per-slot `read` of every absent FID).
     fn for_each_key(&mut self, f: &mut dyn FnMut(u16));
+    /// Physically reclaim superseded records so that *overwritten* and *deleted*
+    /// payloads are erased from the medium, not merely unlinked.
+    ///
+    /// A log-structured backend ([`crate::Storage`] over `sequential-storage`)
+    /// only appends: an overwrite leaves the prior value in the log and a delete
+    /// flips a header flag, so the old bytes survive a raw flash dump until the
+    /// page is naturally reclaimed. That is fine for the device-root seal in the
+    /// steady state, but it means a record re-sealed under a *stronger* root (the
+    /// pre-OTP → OTP seed migration) leaves a copy sealed under the *weaker*
+    /// chip-serial-only root readable until compaction. This drives that
+    /// compaction on demand. Default: no-op (backends, like the test RAM map,
+    /// that overwrite in place and keep no remnants).
+    fn compact(&mut self) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(any(test, feature = "test-util"))]

@@ -186,6 +186,13 @@ pub const EF_ATT_CHAIN: u16 = 0xCE11; // packed DER chain: count ‖ (len LE ‖
 pub const EF_EA_ENABLED: u16 = 0xCE12;
 /// `alwaysUv` state — present = enabled. Persists until reset (CTAP 2.1), flash.
 pub const EF_ALWAYS_UV: u16 = 0xCE13;
+/// Set (`[1]`) once the post-OTP-provisioning at-rest hardening pass has run:
+/// the seal migrations re-key secrets from the chip-serial root to the OTP root
+/// and the log-structured store keeps the superseded chip-serial copies until
+/// compaction, so a one-shot [`Fs::compact`](rsk_fs::Fs::compact) scrubs them.
+/// This marker gates that lap to the first OTP boot and makes it crash-safe
+/// (absent ⇒ re-run; the lap is idempotent). See `boot`/`main` wiring.
+pub const EF_HARDENED: u16 = 0xCE14;
 pub const EF_COUNTER: u16 = 0xC000; // global signature counter
 pub const EF_CRED: u16 = 0xCF00; // resident credentials, 0xCF00..0xCFFF
 pub const EF_RP: u16 = 0xD000; // relying-party metadata, 0xD000..0xD0FF

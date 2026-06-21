@@ -263,6 +263,19 @@ async fn main(_spawner: Spawner) {
     rsk_fido::credential::migrate_rp_seal(&dev, &mut fs);
     let _ = rsk_fido::seed::ensure_seed(&dev, &mut fs, &mut rng);
     let _ = rsk_openpgp::scan_files(&dev, &mut fs, &mut rng);
+    // One-shot at-rest hardening. The seal migrations above re-key every secret
+    // from the chip-serial root to the OTP root, but the log-structured store
+    // keeps the superseded chip-serial-sealed copies (notably the pre-OTP seed)
+    // recoverable from a flash dump until the page is reclaimed. Scrub them with
+    // a full GC lap the first time we boot with the OTP key present. Gated on a
+    // flash marker so it runs once and crash-safely: an interrupted lap leaves
+    // `EF_HARDENED` unset and re-runs next boot (the lap is idempotent), and a
+    // device provisioned OTP-first pays it once with nothing to scrub. It is a
+    // multi-second stall — deliberately before USB attach, at an attended
+    // provisioning boot. See `flash_storage::FlashStorage::compact`.
+    if otp_mkek.is_some() && !fs.has_data(rsk_fido::consts::EF_HARDENED) && fs.compact().is_ok() {
+        let _ = fs.put(rsk_fido::consts::EF_HARDENED, &[1u8]);
+    }
     // PHY carries the boot-default LED brightness + steady (PicoForge's global LED
     // knobs) and the RS-Key wire-order tag. Apply them BEFORE `load_led_config` so
     // a per-status `EF_LED_CONF` (set via `rsk led`) overrides brightness/steady;
@@ -292,7 +305,7 @@ async fn main(_spawner: Spawner) {
     config.serial_number = Some("rs-key-0001");
     config.max_power = 100;
     config.max_packet_size_0 = 64;
-    config.device_release = 0x077E; // bcdDevice: our build counter
+    config.device_release = 0x077F; // bcdDevice: our build counter
 
     let mut builder = Builder::new(
         driver,

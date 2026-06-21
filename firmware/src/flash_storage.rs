@@ -46,6 +46,15 @@ const COUNTER_LEN: usize = 128 * 1024;
 const MAIN_PAGES: usize = MAIN_LEN / SECTOR; // 352
 const COUNTER_PAGES: usize = COUNTER_LEN / SECTOR; // 32
 
+/// Transient FID the [`Storage::compact`] lap churns to advance the main ring.
+/// Routed to main (not a counter FID), it never reaches `Fs` and is removed at
+/// the end of the lap — pick a slot no protocol uses (the FIDO 0xCExx block
+/// ends at `EF_HARDENED` 0xCE14; creds start at 0xCF00).
+const SCRUB_FILLER_FID: u16 = 0xCEFE;
+/// One throwaway record's payload during the scrub lap. Larger ⇒ fewer
+/// `store_item` calls; must fit `KV_BUF` alongside the 2-byte key.
+const SCRUB_FILLER: [u8; 1024] = [0xA5; 1024];
+
 /// Cached key→location maps. A hit lets `store_item`'s `migrate_items` take the O(1)
 /// path per item instead of a full-partition scan — the difference between a ~0.2 s
 /// and a multi-second migration. Main covers ~250 resident credentials (two FIDs
@@ -185,6 +194,43 @@ impl Storage for FlashStorage {
     fn for_each_key(&mut self, f: &mut dyn FnMut(u16)) {
         for_each_in(&mut self.main, &mut self.buf, f);
         for_each_in(&mut self.counter, &mut self.buf, f);
+    }
+
+    /// Physically scrub superseded records from the **main** partition (where
+    /// every secret lives) by driving its `sequential-storage` ring a full lap.
+    ///
+    /// The library's `store_item` (overwrite) only appends, and `remove_item`
+    /// only flips a header CRC — both leave the prior payload in flash, readable
+    /// from a raw dump until the page is reclaimed. A page is reclaimed (its live
+    /// items migrated forward, then the whole 4 KiB sector erased) only when the
+    /// ring head needs it. So we write one partition's worth of throwaway records
+    /// to force the head all the way around: every page that held data at entry
+    /// is swept and erased, and the superseded copy of any migrated secret — in
+    /// particular the chip-serial-sealed pre-OTP seed left by
+    /// `migrate_keydev_boot` — is physically destroyed.
+    ///
+    /// One lap needs at most `MAIN_LEN` bytes of fresh writes (less by however
+    /// much live data is relocated en route), so `MAIN_LEN + SECTOR` guarantees a
+    /// full sweep no matter how full the partition is. The counter partition holds
+    /// only non-secret counters and churns on its own, so it is left untouched.
+    /// This is a one-shot, multi-second provisioning cost (see the `EF_HARDENED`
+    /// gate in `main`); it is crash-safe — an interrupted lap leaves the store in
+    /// a valid state and re-runs on the next boot.
+    fn compact(&mut self) -> Result<()> {
+        let writes = (MAIN_LEN + SECTOR).div_ceil(SCRUB_FILLER.len());
+        for i in 0..writes {
+            let mut v = SCRUB_FILLER;
+            v[0] = i as u8; // distinct payloads (defensive; store always appends)
+            block_on(self.main.store_item::<&[u8]>(
+                &mut self.buf,
+                &SCRUB_FILLER_FID,
+                &v.as_slice(),
+            ))
+            .map_err(|_| Error::MemoryFatal)?;
+        }
+        block_on(self.main.remove_item(&mut self.buf, &SCRUB_FILLER_FID))
+            .map_err(|_| Error::MemoryFatal)?;
+        Ok(())
     }
 }
 

@@ -66,6 +66,21 @@ locks the page. On the next boot the firmware notices the provisioned key and
 key wraps, PIN verifiers — under the new root. Your enrolled credentials
 survive; that is the point of the migration layer.
 
+> **At-rest hardening pass.** The migration re-seals each secret under the new
+> root, but the flash store is append-only, so the old chip-serial-sealed
+> copies linger until their page is reclaimed. To stop a flash dump from
+> recovering them, that same first post-burn boot runs a one-shot compaction
+> that physically scrubs the credential partition. It is a multi-second stall
+> that runs **before** the device re-attaches to USB, so on that one boot the
+> device stays dark a little longer than usual — **don't cut power during it.**
+> It runs once (a flash marker gates it) and re-runs if interrupted.
+>
+> **New deployments — burn OTP _before_ you enroll.** A seed generated after the
+> burn is sealed under the fused root from birth, so no chip-serial-sealed copy
+> ever exists and the hardening pass has nothing to scrub. The
+> migrate-in-place path above is for hardening a device you have *already* been
+> using.
+
 ```sh
 rsk reboot bootsel               # picotool needs the chip in BOOTSEL
 rsk otp burn --dry-run           # preview every step

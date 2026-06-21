@@ -241,6 +241,15 @@ impl<S: Storage> Fs<S> {
         Ok(())
     }
 
+    /// Physically scrub superseded records from the backing store (a full
+    /// garbage-collection lap). See [`Storage::compact`]. No-op on backends that
+    /// overwrite in place and accumulate no remnants. Used once, after the
+    /// post-OTP-provisioning seal migrations, to erase the chip-serial-sealed
+    /// copies those migrations supersede.
+    pub fn compact(&mut self) -> Result<()> {
+        self.storage.compact()
+    }
+
     /// Store file contents, registering a dynamic file if new.
     pub fn put(&mut self, fid: u16, data: &[u8]) -> Result<()> {
         self.storage.write(fid, data)?;

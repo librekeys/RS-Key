@@ -13,6 +13,38 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
 
 ## [Unreleased]
 
+### Security
+
+- **A pre-OTP seed remnant survived OTP provisioning, readable from a flash
+  dump without the fused key — now physically scrubbed at the first OTP boot.**
+  RS-Key seals the FIDO seed under the device root (`kbase`): chip-serial-only
+  before OTP provisioning, the fused MKEK after. Burning OTP re-seals the seed
+  from the weaker root to the fused one (`migrate_keydev_boot`), but the
+  `sequential-storage` flash log is append-only — an overwrite leaves the prior
+  value in place and `remove_item` only flips a header CRC, so the superseded
+  *chip-serial-sealed* copy lingered in flash until natural compaction (rare on
+  the cold credential partition). Because that root derives from the chip id
+  alone — no fuse secret — an attacker with a flash dump plus the chip id could
+  recover the seed, and with it every derived FIDO credential, **bypassing the
+  OTP hardening entirely.** This is the same class of issue as the upstream
+  pico-fido/pico-keys-sdk `flash_clear_file` finding (their "clear" zeroes only
+  the length field, leaving the payload); here `sequential-storage`'s logical
+  delete is the equivalent, and the device-root seal is the only thing that made
+  the steady state safe. Fix: the first boot with the OTP key present now runs a
+  one-shot `Fs::compact` — a full garbage-collection lap over the credential
+  partition that migrates live records forward and sector-erases every page,
+  physically destroying the superseded pre-OTP copies. It is gated by a new
+  `EF_HARDENED` flash marker (runs once, before USB attach) and is crash-safe
+  (an interrupted lap leaves the marker unset and re-runs next boot). A device
+  provisioned OTP-first never creates the remnant and the pass finds nothing to
+  scrub. A host-side proof on the real `sequential-storage` + mock-flash stack
+  scans raw flash to confirm the remnant is present before the lap and gone
+  after (`fuzz/tests/churn_compaction.rs`, mutation-checked). `production.md`
+  now documents the pass and recommends burning OTP before enrolling; the
+  threat-model/limitations caveats are corrected (the lingering record was
+  described as "moot against anything but a fused-key compromise", true only for
+  the already-fused soft-lock case, not this one). bcdDevice 0x077E → 0x077F.
+
 ## [0.2.6] — 2026-06-21
 
 ### Fixed
