@@ -7,6 +7,8 @@
 //! supports it (P-256 / P-384 / secp256k1) and random for P-521 (`p521` 0.13
 //! has no deterministic signer). ECDSA signatures are DER-encoded.
 
+use alloc::boxed::Box;
+
 use minicbor::Encoder;
 use minicbor::encode::{Error as CborError, Write};
 use p256::FieldBytes;
@@ -123,10 +125,6 @@ impl P256Key {
 
 /// A multi-scheme CTAP2 credential signing key, selected by the credential's
 /// stored `curve`.
-// The ML-DSA variant dominates the size (~17 KB vs ≤224 B): boxing is not an
-// option (no alloc in this crate) and the value lives in exactly one frame for
-// one request on the worker stack, which budgets for it.
-#[allow(clippy::large_enum_variant)]
 pub enum CredKey {
     P256(p256::ecdsa::SigningKey),
     P384(p384::ecdsa::SigningKey),
@@ -136,9 +134,16 @@ pub enum CredKey {
     P521(p521::NonZeroScalar),
     K256(k256::ecdsa::SigningKey),
     Ed25519(ed25519_dalek::SigningKey),
-    // ~17 KB expanded keypair; boxed nowhere — the enum lives briefly on the
-    // worker stack during one request. fips204 zeroizes it on drop.
-    MlDsa44(rsk_crypto::MlDsa44),
+    // ~17 KB of fips204 NTT-form keys — HEAP-BOXED, not inline. ML-DSA-44
+    // signing (`getAssertion`) drives fips204's rejection-sampling loop, whose
+    // stack high-water (~well over 100 KiB on thumbv8m) nearly fills the
+    // RP2350's ~222 KiB worker stack on its own. Holding the key inline put
+    // those 17 KB on the same frame, right below that call, and tipped it into
+    // overflow → a hard wedge (panic-halt, FIDO dark until replug). Boxing moves
+    // the key to the firmware heap — idle during a FIDO request, since applet
+    // keys are reconstructed per-op — freeing that headroom. fips204 zeroizes
+    // the keys on drop; the `Box` adds no `Drop` of its own.
+    MlDsa44(Box<rsk_crypto::MlDsa44>),
 }
 
 // The SigningKey variants zeroize themselves on drop; the bare P-521 scalar
@@ -202,9 +207,11 @@ impl CredKey {
                 // The ratchet's first 32 bytes are the FIPS 204 keygen seed ξ;
                 // expansion is deterministic, so the same credential id always
                 // rebuilds the same lattice keypair (as the EC schemes do).
+                // Boxed onto the heap so the ~17 KB keypair is off the worker
+                // stack before the stack-heavy `sign` runs (see the variant doc).
                 let mut xi = [0u8; 32];
                 xi.copy_from_slice(raw.get(..32)?);
-                let key = rsk_crypto::MlDsa44::from_seed(&xi);
+                let key = Box::new(rsk_crypto::MlDsa44::from_seed(&xi));
                 xi.zeroize();
                 Some(Self::MlDsa44(key))
             }
@@ -624,5 +631,23 @@ mod tests {
         let (px, py) = P256Key::from_scalar(&scalar).unwrap().public_xy();
         assert_eq!(x, px);
         assert_eq!(y, py);
+    }
+
+    #[test]
+    fn credkey_stays_compact_so_mldsa_key_is_off_the_stack() {
+        // The ML-DSA-44 keypair is ~17 KB of fips204 NTT-form keys. Held inline in
+        // `CredKey` it rode the worker stack into `sign`, whose fips204
+        // rejection-sampling loop already nearly fills the RP2350's ~222 KiB
+        // stack — the 17 KB tipped getAssertion into overflow → a hard device
+        // wedge. It MUST stay `Box`-ed (heap, idle during a FIDO request). This
+        // guard fails loudly if the key regresses back inline: the boxed enum is a
+        // few hundred bytes (largest inline variant is Ed25519's expanded
+        // `SigningKey`), an inline keypair would be ~16.6 KB.
+        let size = core::mem::size_of::<CredKey>();
+        assert!(
+            size <= 512,
+            "CredKey is {size} bytes — is the ML-DSA-44 keypair still Box-ed? \
+             An inline fips204 keypair (~16.6 KB) overflows the worker stack in sign()."
+        );
     }
 }
