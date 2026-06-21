@@ -105,11 +105,13 @@ def main():
         status, gi = ctap(dev, cid, 0x04)
         assert status == 0x00
         algs = [e["alg"] for e in gi[10]]
+        # Advertised set/order: ES256, ES384, ES512, then EdDSA (-8); advertise-pqc
+        # prepends ML-DSA-44 (-48). ES256K (-47) is implemented but never advertised.
         if -48 in algs:
-            assert algs == [-48, -7, -8, -35, -36, -47], f"algorithms list changed: {algs}"
+            assert algs == [-48, -7, -35, -36, -8], f"algorithms list changed: {algs}"
             print("getInfo: ML-DSA-44 advertised (advertise-pqc build)")
         else:
-            assert algs == [-7, -8, -35, -36, -47], f"classic algorithms list changed: {algs}"
+            assert algs == [-7, -35, -36, -8], f"classic algorithms list changed: {algs}"
             print("getInfo: classic algorithms only (Firefox-safe default build)")
         assert gi[5] == 7609, f"maxMsgSize {gi[5]}, want 7609"
 

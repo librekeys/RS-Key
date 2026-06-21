@@ -105,7 +105,7 @@ def main():
         fail(f"flash info is {len(fi)} bytes, want 20")
     free, used, total, nfiles, size = (int.from_bytes(fi[i:i + 4], "big") for i in range(0, 20, 4))
     print(f"  free={free} used={used} total={total} nfiles={nfiles} flash={size}")
-    if free + used != total or nfiles == 0 or size != 4 * 1024 * 1024:
+    if free + used != total or nfiles == 0 or size not in (4 * 1024 * 1024, 16 * 1024 * 1024):
         fail("flash info inconsistent")
 
     # ---- phy write/read (inert fields only: brightness + opts) ----

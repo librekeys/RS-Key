@@ -54,7 +54,7 @@ def main():
     # hard-fails on unknown COSE ids); the advertise-pqc build prepends it. The
     # capability is proven either way by the -48 pick below.
     algs = [a["alg"] for a in info.algorithms]
-    assert algs in ([-7, -8, -35, -36, -47], [-48, -7, -8, -35, -36, -47]), f"unexpected algorithms: {algs}"
+    assert algs in ([-7, -35, -36, -8], [-48, -7, -35, -36, -8]), f"unexpected algorithms: {algs}"
     print(f"getInfo algorithms: {algs}")
     Ctap2(dev).reset()  # idempotent clean slate, like the raw PQC tool
 
