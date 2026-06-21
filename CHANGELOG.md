@@ -13,6 +13,8 @@ tag: the USB `bcdDevice` build counter (bumped on every behavior change), and
 
 ## [Unreleased]
 
+## [0.2.8] — 2026-06-21
+
 ### Changed
 
 - **A WebAuthn login is a single touch by default.** RS-Key now honors the
