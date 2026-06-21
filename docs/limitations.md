@@ -138,7 +138,11 @@ covers the security boundary, this page covers feature and hardware gaps.
 
 - **The flash log heals lazily**: deleting/superseding a record (e.g.
   enabling the soft-lock) leaves the old record in the log until compaction
-  naturally overwrites it. At-rest guarantees harden over time rather than
-  instantly. *(The superseded record is still sealed to the device root.)*
+  naturally overwrites it, so most at-rest guarantees harden over time rather
+  than instantly. *(On a provisioned device the superseded copy is sealed to
+  the fused root.)* The one record that is **not** left to lazy healing is the
+  pre-OTP seed superseded by the OTP-burn migration — it is sealed under the
+  chip-serial-only root, so the first boot after provisioning scrubs it eagerly
+  with a one-shot full-GC-lap compaction.
 - **The board is the security boundary** — anyone with the device and your
   PIN is you. Same as every security key.

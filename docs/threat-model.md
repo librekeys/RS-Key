@@ -62,10 +62,20 @@ bulk stream, ISO-7816 APDUs, CTAP2 CBOR. Defenses:
   key only you hold (BIP-39/SLIP-39 words). A stolen device — even running
   genuine firmware — refuses every FIDO operation until that key is presented
   over an encrypted channel at power-up. Device + words, two factors.
-- Caveat: the flash log keeps a superseded plain-seed record until natural
-  compaction overwrites it, so soft-lock's at-rest guarantee hardens over
-  time rather than at the instant of enabling (the lingering record is still
-  kbase-sealed — moot against anything but a fused-key compromise).
+- Caveat — superseded records linger: the flash log is append-only, so
+  re-sealing or deleting a secret leaves the old copy on flash until its page
+  is reclaimed. Two cases differ in how much that matters:
+  - The **OTP-burn migration** supersedes the *pre-OTP* seed, which was sealed
+    under the chip-serial-only root (no fuse secret). Left alone, a flash dump
+    plus the chip id would recover it — bypassing the burn. So it is **not**
+    left to lazy healing: the first boot after provisioning runs a one-shot
+    compaction (`Fs::compact`, gated by the `EF_HARDENED` marker, crash-safe)
+    that drives a full GC lap over the credential partition and physically
+    erases every superseded pre-OTP record before the device re-attaches to USB.
+  - The **soft-lock** transition leaves the same kind of lingering record, but
+    on a provisioned device it is already sealed under the fused root — moot
+    against anything short of a fused-key compromise — so soft-lock's at-rest
+    guarantee simply hardens over time as natural compaction overwrites it.
 - The FIDO seed is **never PIN-wrapped at rest** (a deliberate design
   decision): UP-only operations — `ssh ed25519-sk`, U2F, no-PIN assertions —
   must work from a cold boot with no PIN presented, so a PIN-keyed at-rest

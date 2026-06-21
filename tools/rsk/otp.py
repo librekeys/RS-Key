@@ -127,6 +127,13 @@ def burn(args):
           " — BL/NS hard-lock NOT applied (OTP page 63 is bootloader-read-only;\n"
           "run `rsk otp lock-page58` from the firmware). Page-58 keys stay readable\n"
           "via `picotool otp get` from BOOTSEL until then."))
+    print(
+        "\nNext boot migrates your secrets under the fused root, then runs a\n"
+        "one-shot at-rest hardening pass that physically scrubs the old\n"
+        "chip-serial-sealed copies from flash. That first boot stays dark a few\n"
+        "seconds longer than usual (the scrub runs before USB attach) — do NOT\n"
+        "cut power during it. It runs once and re-runs if interrupted."
+    )
 
 
 def lock_page58(args):
