@@ -85,6 +85,15 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(led_order, values(\"rgb\", \"grb\"))");
     println!("cargo:rerun-if-env-changed=LED_ORDER");
 
+    // Maximum number of addressable LEDs the binary can drive. The PIO state
+    // machine and frame buffers are sized to this ceiling; the actual number
+    // of connected LEDs is set at **runtime** via the phy record (`rsk hw
+    // --led-num`), which must be ≤ MAX_LEDS. Default 8 covers the common
+    // 1-8 range; boards with more (up to 64) override via `MAX_LEDS=<n>`.
+    let max_leds = resolve_max_leds();
+    println!("cargo:rustc-env=PK_MAX_LEDS={max_leds}");
+    println!("cargo:rerun-if-env-changed=MAX_LEDS");
+
     // Bake fake OTP keys into the image instead of reading the fuses — exercises
     // the kbase migration + boot path without an irreversible OTP write.
     // TEST BUILDS ONLY; never set for a shipped image.
@@ -193,6 +202,20 @@ fn resolve_led_kind() -> String {
         "gpio" | "pimoroni" | "none" => v,
         _ => panic!("LED_KIND={raw:?} must be one of: ws2812, gpio, pimoroni, none"),
     }
+}
+
+/// Resolve `MAX_LEDS` (the PIO/array ceiling for addressable LEDs) to a
+/// positive integer; defaults to 8. The runtime count (`rsk hw --led-num`)
+/// must be ≤ this value.
+fn resolve_max_leds() -> u32 {
+    let raw = env::var("MAX_LEDS").unwrap_or_else(|_| "8".into());
+    let v = raw
+        .trim()
+        .parse::<u32>()
+        .unwrap_or_else(|_| panic!("MAX_LEDS={raw:?} must be a positive integer"));
+    assert!(v >= 1, "MAX_LEDS must be >= 1, got {v}");
+    assert!(v <= 64, "MAX_LEDS={v} is unreasonably large; max 64");
+    v
 }
 
 /// Resolve `LED_ORDER` (the WS2812 wire byte order) to `rgb` or `grb`; defaults
