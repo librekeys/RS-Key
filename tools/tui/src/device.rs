@@ -664,13 +664,37 @@ pub fn led_get() -> Result<String, String> {
     if (s1, s2) != (0x90, 0x00) || d.len() < 9 {
         return Err(format!("GET LED {s1:02X}{s2:02X}"));
     }
+    let stride = if d.len() >= 17 {
+        4
+    } else if d.len() >= 13 {
+        3
+    } else {
+        2
+    };
     let names = ["idle", "processing", "touch", "boot"];
+    let effect_names = ["legacy", "vapor", "bounce", "flow", "sparkle"];
     let mut out = format!("mode = {}\n", if d[0] != 0 { "steady" } else { "blink" });
     for (i, name) in names.iter().enumerate() {
+        let off = 1 + i * stride;
+        // stride=2: [color, brightness]; stride>=3: [effect, color, brightness, …]
+        let (color, brightness) = if stride >= 3 {
+            (d[off + 1], d[off + 2])
+        } else {
+            (d[off], d[off + 1])
+        };
+        let effect = if stride >= 3 {
+            format!(
+                " effect={}",
+                effect_names.get(d[off] as usize).copied().unwrap_or("?")
+            )
+        } else {
+            String::new()
+        };
         out += &format!(
-            "{name:<11} {}  (brightness {})\n",
-            COLORS.get(d[1 + 2 * i] as usize).copied().unwrap_or("?"),
-            d[2 + 2 * i]
+            "{name:<11} {}  (brightness {}){}\n",
+            COLORS.get(color as usize).copied().unwrap_or("?"),
+            brightness,
+            effect,
         );
     }
     Ok(out)
@@ -683,8 +707,25 @@ pub fn led_cycle_idle() -> Result<String, String> {
     if (s1, s2) != (0x90, 0x00) || d.len() < 9 {
         return Err(format!("GET LED {s1:02X}{s2:02X}"));
     }
-    let next = ((d[1] as usize) % 7) + 1;
-    let brightness = if d[2] == 0 { 16 } else { d[2] };
+    let stride = if d.len() >= 17 {
+        4
+    } else if d.len() >= 13 {
+        3
+    } else {
+        2
+    };
+    // idle status: color/brightness offset depends on stride.
+    let (idle_color, idle_brightness) = if stride >= 3 {
+        (d[2], d[3]) // [steady, (effect, color, brightness, …), …]
+    } else {
+        (d[1], d[2]) // [steady, (color, brightness), …]
+    };
+    let next = ((idle_color as usize) % 7) + 1;
+    let brightness = if idle_brightness == 0 {
+        16
+    } else {
+        idle_brightness
+    };
     let p2 = (next as u8 & 0x7) | if d[0] != 0 { 0x08 } else { 0 };
     let (_, s1, s2) = c.apdu(&[0x00, 0x10, brightness, p2])?;
     if (s1, s2) != (0x90, 0x00) {
@@ -1163,7 +1204,7 @@ impl DeviceProvider for MockProvider {
             Action::LedGet => ActionResult::Report {
                 title: "LED state".into(),
                 body: format!(
-                    "mode = steady\nidle        {}  (brightness 16)\nprocessing  blue  (brightness 32)\ntouch       green  (brightness 64)\nboot        white  (brightness 8)\n",
+                    "mode = steady\nidle        {}  (brightness 16) effect=vapor\nprocessing  blue  (brightness 32) effect=flow\ntouch       green  (brightness 64) effect=bounce\nboot        white  (brightness  8) effect=sparkle\n",
                     COLORS[self.idle_color]
                 ),
             },
