@@ -29,6 +29,9 @@ const TAG_LED_DRIVER: u8 = 0xC;
 // 0 = rgb (passthrough), 1 = grb (red/green swapped). PicoForge skips it as
 // unknown and drops it on a read-modify-write; RS-Key's own tools preserve it.
 const TAG_LED_ORDER: u8 = 0xD;
+// RS-Key vendor tag: number of physically-connected addressable LEDs.
+// 0 = unset (use the build's MAX_LEDS default).
+const TAG_LED_NUM: u8 = 0xE;
 
 /// `led_order` wire value: a standard WS2812B (GRB) part, red↔green swapped.
 pub const LED_ORDER_GRB: u8 = 1;
@@ -62,7 +65,7 @@ pub fn effective_usb_itf(phy: &PhyData) -> u8 {
 }
 
 /// Largest serialized record (every TLV present, 32-byte product). The trailing
-/// `(2 + 1)` is the RS-Key `led_order` tag.
+/// `(2 + 1) × 2` covers the RS-Key `led_order` and `led_num` tags.
 pub const PHY_MAX_SIZE: usize = (2 + 4)
     + (2 + 1)
     + (2 + 1)
@@ -72,7 +75,8 @@ pub const PHY_MAX_SIZE: usize = (2 + 4)
     + (2 + 4)
     + (2 + 1)
     + (2 + 1)
-    + (2 + 1);
+    + (2 + 1)
+    + (2 + 1); // led_num
 
 const PRODUCT_CAP: usize = 32;
 
@@ -120,6 +124,9 @@ pub struct PhyData {
     pub led_driver: Option<u8>,
     /// RS-Key WS2812 wire order (tag `0x0D`): `0` = rgb, `1` = grb.
     pub led_order: Option<u8>,
+    /// Number of physically connected addressable LEDs (tag `0x0E`);
+    /// `None` / `0` = use the build's `MAX_LEDS` default.
+    pub led_num: Option<u8>,
 }
 
 impl PhyData {
@@ -159,6 +166,7 @@ impl PhyData {
                 (TAG_ENABLED_USB_ITF, 1) => phy.enabled_usb_itf = Some(v[0]),
                 (TAG_LED_DRIVER, 1) => phy.led_driver = Some(v[0]),
                 (TAG_LED_ORDER, 1) => phy.led_order = Some(v[0]),
+                (TAG_LED_NUM, 1) => phy.led_num = Some(v[0]),
                 _ => {}
             }
             p = &p[tlen..];
@@ -206,6 +214,9 @@ impl PhyData {
         }
         if let Some(o) = self.led_order {
             w.tlv(TAG_LED_ORDER, &[o])?;
+        }
+        if let Some(n) = self.led_num {
+            w.tlv(TAG_LED_NUM, &[n])?;
         }
         Some(w.len)
     }
@@ -326,6 +337,9 @@ mod proofs {
         if kani::any() {
             phy.led_order = Some(kani::any());
         }
+        if kani::any() {
+            phy.led_num = Some(kani::any());
+        }
 
         let mut buf = [0u8; PHY_MAX_SIZE];
         let n = phy.serialize(&mut buf).unwrap();
@@ -348,6 +362,7 @@ mod proofs {
         );
         assert_eq!(got.led_driver, phy.led_driver);
         assert_eq!(got.led_order, phy.led_order);
+        assert_eq!(got.led_num, phy.led_num);
     }
 }
 
@@ -368,6 +383,7 @@ mod tests {
             enabled_usb_itf: Some(USB_ITF_CCID | USB_ITF_HID),
             led_driver: Some(3),
             led_order: Some(LED_ORDER_GRB),
+            led_num: Some(4),
         };
         let mut buf = [0u8; PHY_MAX_SIZE];
         let n = phy.serialize(&mut buf).unwrap();
