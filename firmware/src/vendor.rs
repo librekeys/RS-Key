@@ -15,7 +15,7 @@ pub const VENDOR_AID: &[u8] = &[0xF0, 0x00, 0x00, 0x00, 0x01];
 
 /// Dynamic file holding the counter; `Fs::scan` rediscovers it after a reboot.
 const COUNTER_FID: u16 = 0xCC01;
-/// LED config block `[steady, (color, brightness) × status]`; outside both reset
+/// LED config block `[steady, (effect, color, brightness) × status]`; outside both reset
 /// scopes (sticky). A legacy 2/3-byte record (pre-per-status firmware) is mapped
 /// onto the idle status by [`crate::led::load_block`].
 const EF_LED_CONF: u16 = 0x1123;
@@ -92,10 +92,17 @@ impl<S: Storage> Applet<Fs<S>> for VendorApplet {
             }
             INS_SET_LED => {
                 // One status (P2 bits 5:4) gets P1 brightness + P2 color; the
-                // steady bit is global. Apply live, then persist the whole block.
+                // steady bit is global. Optional data bytes set effect and speed.
                 let status = (apdu.p2 >> 4) & 0x3;
                 crate::led::set_status_config(status, apdu.p2 & 0x7, apdu.p1);
                 crate::led::set_steady(apdu.p2 & P2_STEADY != 0);
+                if apdu.nc >= 1 {
+                    crate::led::set_status_effect(
+                        status,
+                        apdu.data[0],
+                        apdu.data.get(1).copied().unwrap_or(0),
+                    );
+                }
                 if fs.put(EF_LED_CONF, &crate::led::config_block()).is_err() {
                     return Sw::MEMORY_FAILURE;
                 }

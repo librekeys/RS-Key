@@ -289,6 +289,11 @@ async fn main(_spawner: Spawner) {
         if let Some(order) = phy.led_order {
             led::set_rg_swap(order != 0);
         }
+        // Runtime LED count from phy; 0 or None means "use the build default"
+        // (already set as `RUNTIME_LEDS = MAX_LEDS` at init).
+        if let Some(n) = phy.led_num.filter(|&n| n > 0) {
+            led::set_runtime_leds(n);
+        }
     }
     vendor::load_led_config(&mut fs);
     rsk_otp::power_up_bump(&mut fs);
@@ -305,7 +310,7 @@ async fn main(_spawner: Spawner) {
     config.serial_number = Some("rs-key-0001");
     config.max_power = 100;
     config.max_packet_size_0 = 64;
-    config.device_release = 0x0780; // bcdDevice: our build counter
+    config.device_release = 0x0781; // bcdDevice: our build counter
 
     let mut builder = Builder::new(
         driver,

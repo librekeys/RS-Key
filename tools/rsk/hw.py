@@ -18,6 +18,7 @@ at runtime — no reflash. The change applies at the NEXT boot, so a warm reboot
 issued unless --no-reboot. (Per-status COLOURS are a separate, live setting that
 persists in a different record — see `rsk led`.)
 """
+
 from . import ccid
 from .status import RESCUE_AID
 
@@ -25,6 +26,7 @@ from .status import RESCUE_AID
 TAG_LED_GPIO = 0x04
 TAG_LED_DRIVER = 0x0C
 TAG_LED_ORDER = 0x0D  # RS-Key vendor tag (PicoForge skips it as unknown)
+TAG_LED_NUM = 0x0E  # RS-Key vendor tag: addressable LED count
 
 # Driver numbering follows pico-fido / PicoForge's LedDriverType.
 DRIVERS = {"gpio": 1, "pimoroni": 2, "ws2812": 3}
@@ -34,16 +36,39 @@ ORDER_NAMES = {v: k for k, v in ORDERS.items()}
 
 
 def register(sub):
-    p = sub.add_parser("hw", help="LED hardware wiring (pin/driver/order) via the phy record")
-    p.add_argument("--led-pin", type=int, metavar="0-29",
-                   help="WS2812/gpio data GPIO (RP2350A 0..=29)")
-    p.add_argument("--led-driver", choices=sorted(DRIVERS),
-                   help="LED backend: gpio (on/off), pimoroni (3-pin PWM RGB), ws2812 (addressable)")
-    p.add_argument("--led-order", choices=sorted(ORDERS),
-                   help="WS2812 wire byte order: grb (standard WS2812B) or rgb (Waveshare RP2350-One)")
-    p.add_argument("--get", action="store_true", help="read the current phy LED config and exit")
-    p.add_argument("--no-reboot", action="store_true",
-                   help="don't reboot after writing (the change applies on the next boot)")
+    p = sub.add_parser(
+        "hw", help="LED hardware wiring (pin/driver/order) via the phy record"
+    )
+    p.add_argument(
+        "--led-pin",
+        type=int,
+        metavar="0-29",
+        help="WS2812/gpio data GPIO (RP2350A 0..=29)",
+    )
+    p.add_argument(
+        "--led-driver",
+        choices=sorted(DRIVERS),
+        help="LED backend: gpio (on/off), pimoroni (3-pin PWM RGB), ws2812 (addressable)",
+    )
+    p.add_argument(
+        "--led-order",
+        choices=sorted(ORDERS),
+        help="WS2812 wire byte order: grb (standard WS2812B) or rgb (Waveshare RP2350-One)",
+    )
+    p.add_argument(
+        "--led-num",
+        type=int,
+        metavar="1-255",
+        help="number of addressable LEDs connected (runtime, overrides MAX_LEDS)",
+    )
+    p.add_argument(
+        "--get", action="store_true", help="read the current phy LED config and exit"
+    )
+    p.add_argument(
+        "--no-reboot",
+        action="store_true",
+        help="don't reboot after writing (the change applies on the next boot)",
+    )
     p.set_defaults(func=run)
 
 
@@ -56,7 +81,7 @@ def _parse_tlv(data):
         i += 2
         if i + ln > len(data):
             break
-        out.append((tag, data[i:i + ln]))
+        out.append((tag, data[i : i + ln]))
         i += ln
     return out
 
@@ -89,21 +114,33 @@ def _show(tlvs):
     pin = by.get(TAG_LED_GPIO)
     drv = by.get(TAG_LED_DRIVER)
     order = by.get(TAG_LED_ORDER)
-    print("phy LED config ('(build default)' = field absent, firmware build value used):")
+    print(
+        "phy LED config ('(build default)' = field absent, firmware build value used):"
+    )
     print(f"  pin     {pin[0] if pin else '(build default)'}")
     print(f"  driver  {DRIVER_NAMES.get(drv[0], drv[0]) if drv else '(build default)'}")
-    print(f"  order   {ORDER_NAMES.get(order[0], order[0]) if order else '(build default)'}")
+    print(
+        f"  order   {ORDER_NAMES.get(order[0], order[0]) if order else '(build default)'}"
+    )
+    led_num = by.get(TAG_LED_NUM)
+    print(f"  num     {led_num[0] if led_num else '(build default)'}")
 
 
 def run(args):
     conn = ccid.connect()
     _, s1, s2 = ccid.select(conn, RESCUE_AID)
     if (s1, s2) != (0x90, 0x00):
-        raise SystemExit(f"SELECT rescue AID failed: {s1:02X}{s2:02X} (firmware too old?)")
+        raise SystemExit(
+            f"SELECT rescue AID failed: {s1:02X}{s2:02X} (firmware too old?)"
+        )
     tlvs = _read_phy(conn)
 
-    setting = (args.led_pin is not None or args.led_driver is not None
-               or args.led_order is not None)
+    setting = (
+        args.led_pin is not None
+        or args.led_driver is not None
+        or args.led_order is not None
+        or args.led_num is not None
+    )
     if args.get or not setting:
         _show(tlvs)
         return
@@ -116,9 +153,15 @@ def run(args):
         _upsert(tlvs, TAG_LED_DRIVER, DRIVERS[args.led_driver])
     if args.led_order is not None:
         _upsert(tlvs, TAG_LED_ORDER, ORDERS[args.led_order])
+    if args.led_num is not None:
+        if not 1 <= args.led_num <= 255:
+            raise SystemExit("--led-num must be 1–255")
+        _upsert(tlvs, TAG_LED_NUM, args.led_num)
 
     blob = _serialize_tlv(tlvs)
-    _, s1, s2 = ccid.transmit(conn, [0x80, 0x1C, 0x01, 0x00, len(blob)] + list(blob) + [0x00])
+    _, s1, s2 = ccid.transmit(
+        conn, [0x80, 0x1C, 0x01, 0x00, len(blob)] + list(blob) + [0x00]
+    )
     if (s1, s2) != (0x90, 0x00):
         raise SystemExit(f"WRITE phy failed: {s1:02X}{s2:02X}")
     print("phy LED config written ✓")

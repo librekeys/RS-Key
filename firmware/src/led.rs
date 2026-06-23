@@ -38,9 +38,29 @@ use embassy_rp::gpio::{Level, Output};
 #[cfg(not(led_kind = "none"))]
 use embassy_rp::pwm::{Config as PwmConfig, Pwm};
 
-/// A single on-board addressable LED.
+/// Maximum number of addressable LEDs the PIO buffer and frame arrays are
+/// sized to. Baked at compile time via the `MAX_LEDS` build flag (default 8);
+/// the actual connected count is set at runtime via `rsk hw --led-num` and
+/// must be ≤ this value.
 #[cfg(not(led_kind = "none"))]
-pub const NUM_LEDS: usize = 1;
+pub const MAX_LEDS: usize = max_leds();
+
+/// Parse the `PK_MAX_LEDS` env string to `usize` in const context.
+/// Panics at compile time if the value exceeds `u8::MAX` (the runtime count
+/// is stored as a `u8`, so the ceiling must fit).
+#[cfg(not(led_kind = "none"))]
+const fn max_leds() -> usize {
+    let s = env!("PK_MAX_LEDS");
+    let b = s.as_bytes();
+    let mut acc: usize = 0;
+    let mut i = 0;
+    while i < b.len() {
+        acc = acc * 10 + (b[i] - b'0') as usize;
+        i += 1;
+    }
+    assert!(acc <= 255, "MAX_LEDS must fit in u8");
+    acc
+}
 
 /// Status indices — also the index into [`TIMING`]/[`DEFAULT_COLOR`], the
 /// per-status atomics, and the `EF_LED_CONF` layout.
@@ -73,8 +93,36 @@ const DEFAULT_COLOR: [u8; N_STATUS] = [COLOR_GREEN, COLOR_GREEN, COLOR_YELLOW, C
 /// Default channel max (a gentle 16/255).
 const DEFAULT_BRIGHTNESS: u8 = 16;
 
-/// `EF_LED_CONF` byte layout: `[steady, (color, brightness) × N_STATUS]`.
-pub const CONF_LEN: usize = 1 + 2 * N_STATUS;
+// ------------------------------------------------------------------
+// Effect identifiers and per-status defaults
+// ------------------------------------------------------------------
+
+/// Built-in effect identifiers — stored in `EF_LED_CONF` as the `effect` byte
+/// per status. `EFFECT_LEGACY` reproduces the original Blinker on/off behaviour.
+#[allow(dead_code)]
+pub const EFFECT_LEGACY: u8 = 0;
+pub const EFFECT_VAPOR: u8 = 1; // breathing (all LEDs pulse together)
+pub const EFFECT_BOUNCE: u8 = 2; // smooth bounce with half-step interpolation
+pub const EFFECT_FLOW: u8 = 3; // unidirectional yellow→red flow
+pub const EFFECT_SPARKLE: u8 = 4; // random-colour sparkle per LED
+
+/// Default effect per status (used when the stored effect is 0 / legacy,
+/// and as the initial value before any `rsk led` command).
+const DEFAULT_EFFECT: [u8; N_STATUS] = [
+    EFFECT_VAPOR,   // IDLE
+    EFFECT_FLOW,    // PROCESSING
+    EFFECT_BOUNCE,  // TOUCH
+    EFFECT_SPARKLE, // BOOT
+];
+
+/// Speed value meaning "use the effect's built-in default speed".
+pub const SPEED_DEFAULT: u8 = 0;
+
+/// Default speed per status (all use built-in defaults).
+const DEFAULT_SPEED: [u8; N_STATUS] = [SPEED_DEFAULT; N_STATUS];
+
+/// `EF_LED_CONF` byte layout: `[steady, (effect, color, brightness, speed) × N_STATUS]`.
+pub const CONF_LEN: usize = 1 + 4 * N_STATUS;
 
 static LED_STATUS: AtomicU8 = AtomicU8::new(STATUS_BOOT);
 /// When set, the blink task ignores the on/off phases and shows the current
@@ -93,12 +141,48 @@ static STATUS_BRIGHTNESS: [AtomicU8; N_STATUS] = [
     AtomicU8::new(DEFAULT_BRIGHTNESS),
     AtomicU8::new(DEFAULT_BRIGHTNESS),
 ];
+static STATUS_EFFECT: [AtomicU8; N_STATUS] = [
+    AtomicU8::new(DEFAULT_EFFECT[STATUS_IDLE as usize]),
+    AtomicU8::new(DEFAULT_EFFECT[STATUS_PROCESSING as usize]),
+    AtomicU8::new(DEFAULT_EFFECT[STATUS_TOUCH as usize]),
+    AtomicU8::new(DEFAULT_EFFECT[STATUS_BOOT as usize]),
+];
+static STATUS_SPEED: [AtomicU8; N_STATUS] = [
+    AtomicU8::new(DEFAULT_SPEED[STATUS_IDLE as usize]),
+    AtomicU8::new(DEFAULT_SPEED[STATUS_PROCESSING as usize]),
+    AtomicU8::new(DEFAULT_SPEED[STATUS_TOUCH as usize]),
+    AtomicU8::new(DEFAULT_SPEED[STATUS_BOOT as usize]),
+];
 /// WS2812 wire r/g swap, read live by the addressable render task. Seeds from the
 /// `LED_ORDER` build flag (`grb` → swap red↔green, `rgb` → passthrough) and is
 /// overridden at boot by the phy record's order tag via [`set_rg_swap`]. embassy's
 /// color order stays `Rgb`, so this software swap is the single runtime knob.
 #[cfg(not(led_kind = "none"))]
 static LED_RG_SWAP: AtomicBool = AtomicBool::new(cfg!(led_order = "grb"));
+
+/// The number of addressable LEDs actually connected; set from the phy record
+/// at boot (`rsk hw --led-num`). Must be ≤ [`MAX_LEDS`]. Defaults to `MAX_LEDS`
+/// when the phy record carries no count.
+#[cfg(not(led_kind = "none"))]
+static RUNTIME_LEDS: AtomicU8 = AtomicU8::new(MAX_LEDS as u8);
+
+/// Return the runtime LED count — how many of the [`MAX_LEDS`] buffer slots
+/// are actually connected and should be lit.
+#[cfg(not(led_kind = "none"))]
+pub fn runtime_leds() -> u8 {
+    RUNTIME_LEDS.load(Ordering::Relaxed)
+}
+
+/// Set the runtime LED count (called from `main` at boot, or via `rsk hw`).
+/// Panics if `n` exceeds [`MAX_LEDS`].
+#[cfg(not(led_kind = "none"))]
+pub fn set_runtime_leds(n: u8) {
+    assert!(
+        (n as usize) <= MAX_LEDS,
+        "RUNTIME_LEDS={n} exceeds MAX_LEDS={MAX_LEDS}"
+    );
+    RUNTIME_LEDS.store(n, Ordering::Relaxed);
+}
 
 /// Set the active status (the worker on dispatch start/end, `presence` for a
 /// touch wait). Out-of-range indices are clamped by the render loop.
@@ -118,6 +202,13 @@ pub fn set_status_config(idx: u8, color: u8, brightness: u8) {
     let i = (idx as usize).min(N_STATUS - 1);
     STATUS_COLOR[i].store(color & 0x7, Ordering::Relaxed);
     STATUS_BRIGHTNESS[i].store(brightness, Ordering::Relaxed);
+}
+
+/// Override one status's effect and speed (0 = use effect's built-in default).
+pub fn set_status_effect(idx: u8, effect: u8, speed: u8) {
+    let i = (idx as usize).min(N_STATUS - 1);
+    STATUS_EFFECT[i].store(effect, Ordering::Relaxed);
+    STATUS_SPEED[i].store(speed, Ordering::Relaxed);
 }
 
 /// Toggle the global no-blink (solid) mode.
@@ -142,35 +233,61 @@ pub fn set_all_brightness(b: u8) {
     }
 }
 
-/// The full config as the persisted/`GET LED` block `[steady, (color, br) × N]`.
+/// The full config as the persisted/`GET LED` block `[steady, (effect, color, br, speed) × N]`.
 pub fn config_block() -> [u8; CONF_LEN] {
     let mut b = [0u8; CONF_LEN];
     b[0] = LED_STEADY.load(Ordering::Relaxed) as u8;
     for i in 0..N_STATUS {
-        b[1 + 2 * i] = STATUS_COLOR[i].load(Ordering::Relaxed);
-        b[2 + 2 * i] = STATUS_BRIGHTNESS[i].load(Ordering::Relaxed);
+        b[1 + 4 * i] = STATUS_EFFECT[i].load(Ordering::Relaxed);
+        b[2 + 4 * i] = STATUS_COLOR[i].load(Ordering::Relaxed);
+        b[3 + 4 * i] = STATUS_BRIGHTNESS[i].load(Ordering::Relaxed);
+        b[4 + 4 * i] = STATUS_SPEED[i].load(Ordering::Relaxed);
     }
     b
 }
 
-/// Apply a config block (boot from flash / SET LED). A short buffer is treated as
-/// a legacy record: `[brightness, idle_color]` or `[brightness, idle_color,
-/// steady]`, mapped onto the idle status so an upgrade keeps the old look.
+/// Apply a config block (boot from flash / SET LED). Handles four wire formats:
+///
+/// | Length | Format |
+/// |--------|--------|
+/// | 17+ | `[steady, (effect, color, brightness, speed) × N]` — current |
+/// | 13–16 | `[steady, (effect, color, brightness) × N]` — pre-speed (atomics keep defaults) |
+/// | 7–12 | `[steady, (color, brightness) × N]` — pre-effect (atomics keep defaults) |
+/// | 2–3  | `[brightness, idle_color[, steady]]` — very old legacy |
 pub fn load_block(b: &[u8]) {
-    if b.len() < CONF_LEN {
-        if b.len() >= 2 {
-            STATUS_BRIGHTNESS[STATUS_IDLE as usize].store(b[0], Ordering::Relaxed);
-            STATUS_COLOR[STATUS_IDLE as usize].store(b[1] & 0x7, Ordering::Relaxed);
+    if b.len() >= CONF_LEN {
+        // Current format: [steady, (effect, color, brightness, speed) × N_STATUS]
+        LED_STEADY.store(b[0] != 0, Ordering::Relaxed);
+        for i in 0..N_STATUS {
+            STATUS_EFFECT[i].store(b[1 + 4 * i], Ordering::Relaxed);
+            STATUS_COLOR[i].store(b[2 + 4 * i] & 0x7, Ordering::Relaxed);
+            STATUS_BRIGHTNESS[i].store(b[3 + 4 * i], Ordering::Relaxed);
+            STATUS_SPEED[i].store(b[4 + 4 * i], Ordering::Relaxed);
         }
+    } else if b.len() >= 13 {
+        // Pre-speed format: [steady, (effect, color, brightness) × 4] (3-byte stride)
+        LED_STEADY.store(b[0] != 0, Ordering::Relaxed);
+        for i in 0..N_STATUS {
+            STATUS_EFFECT[i].store(b[1 + 3 * i], Ordering::Relaxed);
+            STATUS_COLOR[i].store(b[2 + 3 * i] & 0x7, Ordering::Relaxed);
+            STATUS_BRIGHTNESS[i].store(b[3 + 3 * i], Ordering::Relaxed);
+            // speed keeps its default (0 = built-in)
+        }
+    } else if b.len() >= 7 {
+        // Pre-effect format: [steady, (color, brightness) × N] — 2-byte stride
+        LED_STEADY.store(b[0] != 0, Ordering::Relaxed);
+        let n = (b.len() - 1) / 2;
+        for i in 0..n.min(N_STATUS) {
+            STATUS_COLOR[i].store(b[1 + 2 * i] & 0x7, Ordering::Relaxed);
+            STATUS_BRIGHTNESS[i].store(b[2 + 2 * i], Ordering::Relaxed);
+        }
+    } else if b.len() >= 2 {
+        // Legacy 2/3-byte: [brightness, idle_color[, steady]]
+        STATUS_BRIGHTNESS[STATUS_IDLE as usize].store(b[0], Ordering::Relaxed);
+        STATUS_COLOR[STATUS_IDLE as usize].store(b[1] & 0x7, Ordering::Relaxed);
         if b.len() >= 3 {
             LED_STEADY.store(b[2] != 0, Ordering::Relaxed);
         }
-        return;
-    }
-    LED_STEADY.store(b[0] != 0, Ordering::Relaxed);
-    for i in 0..N_STATUS {
-        STATUS_COLOR[i].store(b[1 + 2 * i] & 0x7, Ordering::Relaxed);
-        STATUS_BRIGHTNESS[i].store(b[2 + 2 * i], Ordering::Relaxed);
     }
 }
 
@@ -231,21 +348,270 @@ impl Blinker {
     }
 }
 
-/// `ws2812` backend: drive the single addressable LED with the blink colour,
-/// applying the runtime r/g wire-order swap (see [`LED_RG_SWAP`]) so one binary
-/// serves both RGB- and GRB-wired parts.
+// Compile-time wire-format invariants (asserts fire during `cargo build`,
+// no test harness needed).
+const _: () = {
+    let bytes_per_status = 4;
+    let expected = 1 + bytes_per_status * N_STATUS;
+    assert!(CONF_LEN == expected);
+    assert!(CONF_LEN == 17);
+};
+
+// ------------------------------------------------------------------
+// Effect functions — each renders a full frame [[`RGB8`]; `MAX_LEDS`]
+// from per-status atomics and the global tick counter.
+// ------------------------------------------------------------------
+
+/// Return the configured tick-interval for `status`, or `default_val` when
+/// the stored speed is 0 (meaning "use the built-in default").
+#[cfg(not(led_kind = "none"))]
+fn speed_for(status: usize, default_val: u32) -> u32 {
+    let s = STATUS_SPEED[status].load(Ordering::Relaxed);
+    if s == 0 { default_val } else { s as u32 }
+}
+
+/// Vapour / breathing: all LEDs pulse together with a triangle-wave
+/// brightness envelope (~2 s period).
+#[cfg(not(led_kind = "none"))]
+fn effect_vapor(status: usize, tick: u32) -> [RGB8; MAX_LEDS] {
+    let color_idx = STATUS_COLOR[status].load(Ordering::Relaxed);
+    let peak = STATUS_BRIGHTNESS[status].load(Ordering::Relaxed);
+    if peak == 0 {
+        return [RGB8::default(); MAX_LEDS];
+    }
+
+    // Speed = period in ticks (0 = default ~2 s = 400 ticks).
+    let period = speed_for(status, 400);
+    let half = period / 2;
+    if half == 0 {
+        return [RGB8::default(); MAX_LEDS];
+    }
+    let phase = tick % period;
+    let breathe = if phase < half {
+        phase * peak as u32 / half
+    } else {
+        (period - phase) * peak as u32 / half
+    };
+
+    let c = color_rgb(color_idx, breathe as u8);
+    let n = runtime_leds() as usize;
+    let mut buf = [RGB8::default(); MAX_LEDS];
+    for led in buf[..n].iter_mut() {
+        *led = c;
+    }
+    buf
+}
+
+/// Smooth bounce: a wide hump of light glides back and forth along the
+/// strip with half-step interpolation so there is no endpoint stutter.
+/// Centre LED at full brightness, neighbours at half.
+/// Falls back to a static colour when fewer than 2 runtime LEDs are
+/// connected.
+#[cfg(not(led_kind = "none"))]
+fn effect_bounce(status: usize, tick: u32) -> [RGB8; MAX_LEDS] {
+    let color_idx = STATUS_COLOR[status].load(Ordering::Relaxed);
+    let peak = STATUS_BRIGHTNESS[status].load(Ordering::Relaxed);
+    if peak == 0 {
+        return [RGB8::default(); MAX_LEDS];
+    }
+    let base = color_rgb(color_idx, peak);
+
+    let n = runtime_leds() as usize;
+    if n <= 1 {
+        let mut buf = [RGB8::default(); MAX_LEDS];
+        if n == 1 {
+            buf[0] = base;
+        }
+        return buf;
+    }
+
+    let speed = speed_for(status, 10); // ticks per half-step (0 = default 10 = 50 ms)
+    let virtual_steps = 4 * (n - 1);
+    let raw = (tick / speed) as usize % virtual_steps;
+
+    let half_pos = if raw < 2 * (n - 1) {
+        raw
+    } else {
+        virtual_steps - 1 - raw
+    };
+
+    let led_a = half_pos / 2;
+    let frac = (half_pos & 1) != 0;
+
+    let mut buf = [RGB8::default(); MAX_LEDS];
+    if !frac {
+        buf[led_a] = base;
+        if led_a > 0 {
+            buf[led_a - 1] = scale_rgb(base, 1, 2);
+        }
+        if led_a + 1 < n {
+            buf[led_a + 1] = scale_rgb(base, 1, 2);
+        }
+    } else {
+        buf[led_a] = scale_rgb(base, 1, 2);
+        if led_a + 1 < n {
+            buf[led_a + 1] = scale_rgb(base, 1, 2);
+        }
+    }
+    buf
+}
+
+/// Hot flow: a yellow→orange→red gradient flows unidirectionally left to
+/// right with a trailing wake. Trail length adapts to the runtime LED count.
+#[cfg(not(led_kind = "none"))]
+fn effect_flow(status: usize, tick: u32) -> [RGB8; MAX_LEDS] {
+    let peak = STATUS_BRIGHTNESS[status].load(Ordering::Relaxed) as u16;
+    if peak == 0 {
+        return [RGB8::default(); MAX_LEDS];
+    }
+
+    let n = runtime_leds() as usize;
+    if n == 0 {
+        return [RGB8::default(); MAX_LEDS];
+    }
+
+    let trail = (n - 1).min(4);
+    let speed = speed_for(status, 4); // ticks per step (0 = default 4 = 20 ms)
+    let front = ((tick / speed) as usize) % n;
+
+    let mut buf = [RGB8::default(); MAX_LEDS];
+    for (i, led) in buf[..n].iter_mut().enumerate() {
+        let dist = (i + n - front) % n;
+        let (r, g, b, bright) = match dist {
+            0 => (255, 255, 0, peak),
+            1 if trail >= 1 => (255, 128, 0, peak * 3 / 5),
+            2 if trail >= 2 => (255, 64, 0, peak * 2 / 5),
+            3 if trail >= 3 => (128, 16, 0, peak / 5),
+            4 if trail >= 4 => (64, 0, 0, peak / 8),
+            _ => continue,
+        };
+        *led = RGB8 {
+            r: (r as u16 * bright / 255) as u8,
+            g: (g as u16 * bright / 255) as u8,
+            b: (b as u16 * bright / 255) as u8,
+        };
+    }
+    buf
+}
+
+/// Random sparkle: each LED independently flashes a random colour
+/// (~25 % duty cycle, deterministic splitmix32 hash).
+#[cfg(not(led_kind = "none"))]
+fn effect_sparkle(status: usize, tick: u32) -> [RGB8; MAX_LEDS] {
+    let peak = STATUS_BRIGHTNESS[status].load(Ordering::Relaxed);
+    if peak == 0 {
+        return [RGB8::default(); MAX_LEDS];
+    }
+
+    let mut buf = [RGB8::default(); MAX_LEDS];
+    let n = runtime_leds() as usize;
+    for (i, led) in buf[..n].iter_mut().enumerate() {
+        let h = splitmix32(tick ^ (i as u32 * 0x9e3779b9));
+        if (h & 0xFF) < 64 {
+            let scale = |v: u8| -> u8 { (v as u16 * peak as u16 / 255) as u8 };
+            *led = RGB8 {
+                r: scale((h >> 16) as u8),
+                g: scale((h >> 8) as u8),
+                b: scale(h as u8),
+            };
+        }
+    }
+    buf
+}
+
+/// Scale an `RGB8` by `num / den`.
+#[cfg(not(led_kind = "none"))]
+fn scale_rgb(c: RGB8, num: u8, den: u8) -> RGB8 {
+    RGB8 {
+        r: (c.r as u16 * num as u16 / den as u16) as u8,
+        g: (c.g as u16 * num as u16 / den as u16) as u8,
+        b: (c.b as u16 * num as u16 / den as u16) as u8,
+    }
+}
+
+/// Minimal splitmix32 pseudo-random hash (deterministic, no std dependency).
+#[cfg(not(led_kind = "none"))]
+fn splitmix32(mut x: u32) -> u32 {
+    x = x.wrapping_add(0x9e3779b9);
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x85ebca6b);
+    x ^= x >> 13;
+    x = x.wrapping_mul(0xc2b2ae35);
+    x ^= x >> 16;
+    x
+}
+
+/// `ws2812` backend: addressable LED effect engine. Reads the active status
+/// and its configured effect/color/brightness/speed from atomics each tick
+/// and dispatches to the appropriate effect function. Only the first
+/// [`runtime_leds()`] LEDs are lit; the remaining [`MAX_LEDS`] buffer
+/// positions stay dark.
 #[cfg(not(led_kind = "none"))]
 #[embassy_executor::task]
-pub async fn ws2812_task(mut ws2812: PioWs2812<'static, PIO0, 0, NUM_LEDS, Ws2812Order>) {
-    let mut blinker = Blinker::new();
+pub async fn ws2812_task(mut ws2812: PioWs2812<'static, PIO0, 0, MAX_LEDS, Ws2812Order>) {
+    let mut tick: u32 = 0;
+    // LEGACY blink state (tracked here because it is the only effect that
+    // needs mutable state across ticks).
+    let mut on_phase = false;
+    let mut phase_end = Instant::now();
+
     loop {
-        let mut c = blinker.tick();
+        tick = tick.wrapping_add(1);
+        let s = (LED_STATUS.load(Ordering::Relaxed) as usize).min(N_STATUS - 1);
+
+        let buf = dispatch(s, tick, &mut on_phase, &mut phase_end);
+
+        // Per-pixel r/g wire-order swap (GRB-corrected parts).
+        let mut buf = buf;
         if LED_RG_SWAP.load(Ordering::Relaxed) {
-            core::mem::swap(&mut c.r, &mut c.g);
+            for c in &mut buf {
+                core::mem::swap(&mut c.r, &mut c.g);
+            }
         }
-        ws2812.write(&[c; NUM_LEDS]).await;
+        ws2812.write(&buf).await;
         Timer::after_millis(5).await;
     }
+}
+
+/// Choose and run the effect for status `s`. Exposed as a separate function
+/// (rather than inlined into the task) so it can be unit-tested.
+#[cfg(not(led_kind = "none"))]
+fn dispatch(s: usize, tick: u32, on_phase: &mut bool, phase_end: &mut Instant) -> [RGB8; MAX_LEDS] {
+    let effect_id = STATUS_EFFECT[s].load(Ordering::Relaxed);
+    match effect_id {
+        EFFECT_VAPOR => effect_vapor(s, tick),
+        EFFECT_BOUNCE => effect_bounce(s, tick),
+        EFFECT_FLOW => effect_flow(s, tick),
+        EFFECT_SPARKLE => effect_sparkle(s, tick),
+        // Unknown effect or LEGACY — fall back to on/off blink.
+        _ => legacy_broadcast(s, on_phase, phase_end),
+    }
+}
+
+/// Classic on/off blink: all LEDs show the same colour during the on phase
+/// and turn off during the off phase, controlled by `TIMING[s]`.
+#[cfg(not(led_kind = "none"))]
+fn legacy_broadcast(s: usize, on_phase: &mut bool, phase_end: &mut Instant) -> [RGB8; MAX_LEDS] {
+    let (on_ms, off_ms) = TIMING[s];
+    let now = Instant::now();
+    if now >= *phase_end {
+        *on_phase = !*on_phase;
+        *phase_end = now + Duration::from_millis(if *on_phase { on_ms } else { off_ms });
+    }
+    let c = if *on_phase || LED_STEADY.load(Ordering::Relaxed) {
+        color_rgb(
+            STATUS_COLOR[s].load(Ordering::Relaxed),
+            STATUS_BRIGHTNESS[s].load(Ordering::Relaxed),
+        )
+    } else {
+        RGB8::default()
+    };
+    let n = runtime_leds() as usize;
+    let mut buf = [c; MAX_LEDS];
+    for led in buf[n..].iter_mut() {
+        *led = RGB8::default();
+    }
+    buf
 }
 
 /// `gpio` backend: a plain on/off LED (active-high). Hue and brightness collapse
