@@ -116,6 +116,8 @@ const XOSC_DELAY_MULT: u32 = env_u32(env!("PK_XOSC_DELAY_MULT"));
 // numbering (1=gpio, 2=pimoroni, 3=ws2812).
 #[cfg(not(led_kind = "none"))]
 const BUILD_LED_PIN: u8 = env_u16(env!("PK_LED_PIN")) as u8;
+const BUILD_PRESENCE_IS_GPIO: bool = env_u16(env!("PK_PRESENCE_IS_GPIO")) != 0;
+const BUILD_PRESENCE_PIN: u8 = env_u16(env!("PK_PRESENCE_PIN")) as u8;
 #[cfg(led_kind = "ws2812")]
 const BUILD_DRIVER: u8 = 3;
 #[cfg(led_kind = "gpio")]
@@ -310,7 +312,7 @@ async fn main(_spawner: Spawner) {
     config.serial_number = Some("rs-key-0001");
     config.max_power = 100;
     config.max_packet_size_0 = 64;
-    config.device_release = 0x0781; // bcdDevice: our build counter
+    config.device_release = 0x0782; // bcdDevice: our build counter
 
     let mut builder = Builder::new(
         driver,
@@ -405,6 +407,12 @@ async fn main(_spawner: Spawner) {
             .and_then(|p| p.led_gpio)
             .filter(|&g| g <= 29)
             .unwrap_or(BUILD_LED_PIN);
+        if BUILD_PRESENCE_IS_GPIO && BUILD_PRESENCE_PIN == led_gpio {
+            panic!(
+                "PRESENCE_PIN={} conflicts with active LED pin",
+                BUILD_PRESENCE_PIN
+            );
+        }
         // PHY led_driver (1=gpio, 2=pimoroni, 3=ws2812) overrides the build kind;
         // anything else (unset, or the N/A esp32 value) keeps the build default.
         let led_driver = match phy.as_ref().and_then(|p| p.led_driver) {
@@ -522,7 +530,12 @@ async fn main(_spawner: Spawner) {
 
     core1::spawn(p.CORE1);
 
-    let presence_ref = PRESENCE.init(RefCell::new(BootselPresence::new(p.BOOTSEL)));
+    let presence = if BUILD_PRESENCE_IS_GPIO {
+        BootselPresence::new_gpio(BUILD_PRESENCE_PIN)
+    } else {
+        BootselPresence::new_bootsel(p.BOOTSEL)
+    };
+    let presence_ref = PRESENCE.init(RefCell::new(presence));
     let platform_ref = RESCUE_PLATFORM.init(RefCell::new(rescue_platform::RescuePlatform));
     let (kvm, kvc) = (kvmain_range(), kvcnt_range());
     let kv_total = (kvm.end - kvm.start) + (kvc.end - kvc.start);

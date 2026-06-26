@@ -49,8 +49,9 @@ pub struct CcidApplets<'a> {
 impl<'a> CcidApplets<'a> {
     /// `serial_id` is the device chip id (its first 4 bytes go into the OpenPGP
     /// full AID); `rng` is the hardware TRNG shared with the CTAPHID handler.
-    /// The three `presence` params are the same BOOTSEL button behind per-applet
-    /// traits (the caller's concrete `&RefCell` coerces to each).
+    /// The three `presence` params are the same physical presence source (BOOTSEL
+    /// by default, optionally a GPIO button) behind per-applet traits (the
+    /// caller's concrete `&RefCell` coerces to each).
     #[allow(clippy::too_many_arguments)] // one-time wiring from the worker
     pub fn new(
         fs: &'a RefCell<Store>,
@@ -75,8 +76,8 @@ impl<'a> CcidApplets<'a> {
             // Touch-flagged OATH credentials gate CALCULATE on the same button.
             oath: OathApplet::new(serial_id, serial_hash, otp_key, rng, oath_presence),
             otp: OtpApplet::new(serial_id, otp_presence),
-            // PIV reuses the OpenPGP user-presence trait, so the same BOOTSEL
-            // `presence` drives its slot/management touch policies.
+            // PIV reuses the OpenPGP user-presence trait, so the same presence
+            // source drives its slot/management touch policies.
             piv: PivApplet::new(serial_id, serial_hash, otp_key, rng, presence),
             // The recovery/provisioning interface: phy config, flash stats,
             // secure-boot status, session RTC, device-key attestation, reboot.

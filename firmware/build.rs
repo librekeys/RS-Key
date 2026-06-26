@@ -66,6 +66,17 @@ fn main() {
     println!("cargo:rustc-env=PK_LED_PIN={led_pin}");
     println!("cargo:rerun-if-env-changed=LED_PIN");
 
+    // User-presence source: default BOOTSEL, or `PRESENCE_PIN=<gpio>` for an
+    // active-low GPIO button (internal pull-up). Encoded as two numeric envs so
+    // `main` can parse them with the existing const decimal parser.
+    let (presence_is_gpio, presence_pin) = resolve_presence_pin();
+    println!(
+        "cargo:rustc-env=PK_PRESENCE_IS_GPIO={}",
+        if presence_is_gpio { 1 } else { 0 }
+    );
+    println!("cargo:rustc-env=PK_PRESENCE_PIN={presence_pin}");
+    println!("cargo:rerun-if-env-changed=PRESENCE_PIN");
+
     // LED backend (default `ws2812`, the Waveshare RP2350-One). Selected at
     // compile time so only the chosen driver — and its dependencies (PIO, PWM) —
     // is built. `gpio` = a plain on/off indicator, `pimoroni` = a 3-pin PWM RGB
@@ -188,6 +199,24 @@ fn resolve_led_pin() -> u8 {
         .unwrap_or_else(|_| panic!("LED_PIN={raw:?} must be a GPIO number 0..=29"));
     assert!(v <= 29, "LED_PIN={v} out of range 0..=29 (RP2350A GPIOs)");
     v
+}
+
+/// Resolve `PRESENCE_PIN` to either BOOTSEL (unset / `bootsel`) or a GPIO
+/// number `0..=29` for an active-low button with internal pull-up.
+fn resolve_presence_pin() -> (bool, u8) {
+    let raw = env::var("PRESENCE_PIN").unwrap_or_default();
+    let v = raw.trim().to_ascii_lowercase();
+    if v.is_empty() || v == "bootsel" {
+        return (false, 0);
+    }
+    let pin = v.parse::<u8>().unwrap_or_else(|_| {
+        panic!("PRESENCE_PIN={raw:?} must be `bootsel` or a GPIO number 0..=29")
+    });
+    assert!(
+        pin <= 29,
+        "PRESENCE_PIN={pin} out of range 0..=29 (RP2350A GPIOs)"
+    );
+    (true, pin)
 }
 
 /// Resolve `LED_KIND` (the LED driver backend) to a known value; defaults to

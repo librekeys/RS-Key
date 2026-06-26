@@ -7,32 +7,33 @@ contained. Adding a new `unsafe` requires updating this page. (Safe Rust rules
 out memory-corruption bugs in this code; it is not a security audit — see the
 [threat model](threat-model.md).)
 
-**Runtime sites: 9** — three concerns in the firmware proper (the interrupt
+**Runtime sites: 10** — four concerns in the firmware proper (the interrupt
 handler pair counted honestly as two), two for the per-core prime sieves, one
 in the RSA assembly FFI, two in the standalone flash-wipe tool.
 
 ```mermaid
 flowchart TB
-    subgraph fw["firmware/src/main.rs"]
+    subgraph fw["firmware/src/main.rs + firmware/src/presence.rs"]
       a["interrupt executor (×2)"]
       b["Send for SendUsb"]
       c["heap init"]
+      d["GPIO presence pin steal"]
     end
     subgraph kg["firmware/src/core1.rs"]
-      d["per-core prime sieves (×2)"]
+      e["per-core prime sieves (×2)"]
     end
     subgraph asm["rsk-rsa-asm"]
-      e["modexp FFI"]
+      f["modexp FFI"]
     end
     subgraph wipe["rsk-wipe"]
-      f["raw flash erase/program (×2)"]
+      g["raw flash erase/program (×2)"]
     end
 ```
 
 The `unsafe` lives only in plumbing — none of it is in a parser, applet, crypto
 wrapper, or the filesystem.
 
-## Firmware (`firmware/src/main.rs`)
+## Firmware (`firmware/src/main.rs`, `firmware/src/presence.rs`)
 
 ### 1–2. The high-priority interrupt executor
 
@@ -78,9 +79,25 @@ static buffer used by nothing else.
 *Safe alternative:* none; every embedded allocator initializes this way.
 *Containment:* one call, before any allocation can happen.
 
+### 5. GPIO presence pin type-erasure
+
+```rust
+let any = unsafe { AnyPin::steal(pin) };
+```
+
+The optional `PRESENCE_PIN=<gpio>` path chooses the presence button at runtime
+(instead of a concrete `PIN_n` type at compile time), so the code must convert a
+numeric pin to embassy's type-erased `AnyPin`. `AnyPin::steal` is `unsafe`
+because the caller must guarantee unique ownership of that hardware pin.
+*Safe alternative:* none for a runtime-selected GPIO; the safe constructors
+require a statically known pin type.
+*Containment:* one call site in `BootselPresence::new_gpio`, gated by pin-range
+validation and the single-owner invariant from `main` (the chosen presence pin
+is never handed to the LED/backends; an LED/presence conflict panics at boot).
+
 ## Firmware dual-core keygen (`firmware/src/core1.rs`)
 
-### 5–6. The per-core prime sieves
+### 6–7. The per-core prime sieves
 
 ```rust
 static mut CORE0_SIEVE: IncrementalSieve = IncrementalSieve::new();
@@ -109,7 +126,7 @@ a composite through to the strong-MR/Lucas test, which still rejects it.
 
 ## RSA assembly FFI (`crates/rsk-rsa-asm/src/lib.rs`)
 
-### 7. The modexp call
+### 8. The modexp call
 
 On-card RSA key generation needs hundreds of modular exponentiations over
 1024–2048-bit candidates; the pure-Rust path was ~7× too slow on the
@@ -125,7 +142,7 @@ tests exercise the same API safely.
 
 ## Flash wiper (`rsk-wipe/src/main.rs`)
 
-### 8–9. Raw flash erase/program in a critical section
+### 9–10. Raw flash erase/program in a critical section
 
 The wiper's entire job is to erase the flash the firmware lives on, from a
 RAM-resident image. It calls the ROM flash-erase/program routines inside
