@@ -116,7 +116,8 @@ pub struct AppletHandler<'a> {
     /// Cross-message PIN/UV-auth state (PIN token, the ephemeral ECDH key …);
     /// lives for one power cycle.
     fido_state: rsk_fido::FidoState,
-    /// Physical user presence (BOOTSEL), shared with the OpenPGP applet through a
+    /// Physical user presence (BOOTSEL by default, optionally a GPIO button),
+    /// shared with the OpenPGP applet through a
     /// `RefCell`; borrowed only for a touch wait inside one dispatch.
     presence: &'a RefCell<dyn rsk_fido::UserPresence>,
     serial_id: [u8; 8],

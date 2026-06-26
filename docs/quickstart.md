@@ -33,9 +33,9 @@ picotool uf2 convert target/thumbv8m.main-none-eabihf/release/firmware -t elf fi
 ```
 
 This is the **touch build**: FIDO operations (registering, logging in) require
-a press of the BOOTSEL button — it stands in for the touch sensor on a typical
-hardware key. For a no-touch build (needed by the automated test suites, or if
-your board is hard to reach) add `--features no-touch`. All build knobs:
+a press of the presence button (BOOTSEL by default; set `PRESENCE_PIN=<gpio>` for
+a dedicated GPIO button). For a no-touch build (needed by the automated test
+suites, or if your board is hard to reach) add `--features no-touch`. All build knobs:
 [build.md](build.md).
 
 ## 2. Flash

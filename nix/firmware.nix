@@ -86,6 +86,7 @@ let
       xoscDelayMult ? envOr "XOSC_DELAY_MULT" null, # 1..1024 crystal settle
       flashSize ? envOr "FLASH_SIZE" null, # bytes / 0xHEX / <n>K|M (default 4M)
       ledPin ? envOr "LED_PIN" null, # WS2812 data GPIO 0..=29 (default 16)
+      presencePin ? envOr "PRESENCE_PIN" null, # BOOTSEL or GPIO 0..=29
       fakeMkek ? envOr "FAKE_MKEK" null, # 64 hex — TEST builds only
       fakeDevk ? envOr "FAKE_DEVK" null, # 64 hex — TEST builds only
     }:
@@ -100,6 +101,7 @@ let
         XOSC_DELAY_MULT = if xoscDelayMult == null then null else toString xoscDelayMult;
         FLASH_SIZE = if flashSize == null then null else toString flashSize;
         LED_PIN = if ledPin == null then null else toString ledPin;
+        PRESENCE_PIN = if presencePin == null then null else toString presencePin;
         FAKE_MKEK = fakeMkek;
         FAKE_DEVK = fakeDevk;
       };

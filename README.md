@@ -92,7 +92,7 @@ Full reasoning: [docs/threat-model.md](docs/threat-model.md).
 
 Any RP2350 board with USB. Developed and tested on the **Waveshare RP2350-One**
 (WS2812 status LED on GPIO16; boards without an LED run fine). A different flash
-size or LED pin is a one-line build knob. Details:
+size, LED pin, or presence-button GPIO is a one-line build knob. Details:
 [docs/hardware.md](docs/hardware.md).
 
 ## Quick start
